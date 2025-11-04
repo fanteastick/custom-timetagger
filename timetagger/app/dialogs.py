@@ -725,6 +725,34 @@ class StartStopEdit:
         for but in (self.time1less, self.time1more, self.time2less, self.time2more):
             but.setAttribute("tabIndex", -1)
 
+        # Add snap buttons into the empty spans to the right of the time fields.
+        # These spans already exist in the grid (positions 3 and 7) so inserting
+        # elements here won't change the gridnode.children indexing.
+        try:
+            self._snap_prev_span = self.gridnode.children[3]
+            self._snap_next_span = self.gridnode.children[7]
+
+            # Previous-end snap (to the right of start time)
+            btn_prev = document.createElement("button")
+            btn_prev.setAttribute("type", "button")
+            btn_prev.innerText = "Snap to previous end time"
+            btn_prev.style.fontSize = "75%"
+            btn_prev.style.marginLeft = "6px"
+            btn_prev.onclick = lambda e: self._snap_to_prev_end()
+            self._snap_prev_span.appendChild(btn_prev)
+
+            # Next-start snap (to the right of end time)
+            btn_next = document.createElement("button")
+            btn_next.setAttribute("type", "button")
+            btn_next.innerText = "Snap to next start time"
+            btn_next.style.fontSize = "75%"
+            btn_next.style.marginLeft = "6px"
+            btn_next.onclick = lambda e: self._snap_to_next_start()
+            self._snap_next_span.appendChild(btn_next)
+        except Exception:
+            # Being defensive: if the DOM shape changed, don't crash.
+            pass
+
         # Styling
         self.gridnode.style.display = "grid"
         self.gridnode.style.gridTemplateColumns = "auto 140px 140px 2fr"
@@ -1088,6 +1116,68 @@ class StartStopEdit:
             self._update_duration(True)
         else:
             return self.render()
+
+    def _snap_to_prev_end(self):
+        """Snap start time to the previous record's end time if one exists."""
+        # Determine current start time from inputs (use current values, do nothing if time not set)
+        if self.date1input.value:
+            year1, month1, day1 = self.date1input.value.split("-")
+        else:
+            year1, month1, day1 = self.ori_date1.split("-")
+        year1, month1, day1 = int(year1), int(month1), int(day1)
+
+        hh, mm, ss = self._get_time("time1", False)
+        if hh is None:
+            return  # no valid time typed
+
+        d1 = window.Date(year1, month1 - 1, day1, hh, mm, ss)
+        t1_current = dt.to_time_int(d1)
+
+        # Query records before t1_current and find the record with largest t2 <= t1_current
+        records = window.store.records.get_records(0, t1_current).values()
+        best = None
+        for r in records:
+            if r.t1 < r.t2 and r.t2 <= t1_current:
+                if best is None or r.t2 > best.t2:
+                    best = r
+        if not best:
+            return
+
+        date_str, time_str = dt.time2localstr(best.t2).split(" ")
+        self.date1input.value = date_str
+        self.time1input.value = time_str[:5]
+        # Trigger the same handling as manual fast time change
+        self.onchanged("time1fast")
+
+    def _snap_to_next_start(self):
+        """Snap end time to the next record's start time if one exists."""
+        if self.date2input.value:
+            year2, month2, day2 = self.date2input.value.split("-")
+        else:
+            year2, month2, day2 = self.ori_date2.split("-")
+        year2, month2, day2 = int(year2), int(month2), int(day2)
+
+        hh, mm, ss = self._get_time("time2", False)
+        if hh is None:
+            return
+
+        d2 = window.Date(year2, month2 - 1, day2, hh, mm, ss)
+        t2_current = dt.to_time_int(d2)
+
+        # Query records after t2_current and find the record with smallest t1 >= t2_current
+        records = window.store.records.get_records(t2_current, 1e15).values()
+        best = None
+        for r in records:
+            if r.t1 < r.t2 and r.t1 >= t2_current:
+                if best is None or r.t1 < best.t1:
+                    best = r
+        if not best:
+            return
+
+        date_str, time_str = dt.time2localstr(best.t1).split(" ")
+        self.date2input.value = date_str
+        self.time2input.value = time_str[:5]
+        self.onchanged("time2fast")
 
 
 completer_all_tags = None

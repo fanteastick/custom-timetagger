@@ -15,7 +15,7 @@ else:
     BaseCanvas = object
 
 
-SMALLER = 0.85
+SMALLER = 0.95
 BUTTON_ROUNDNESS = 4
 RECORD_AREA_ROUNDNESS = 4
 RECORD_ROUNDNESS = 6
@@ -88,7 +88,7 @@ def set_colors():
     COLORS.acc_clr = "#DEAA22"
 
     # Grays chosen to work in both light and dark mode
-    COLORS.tick_text = "rgba(130, 130, 130, 1)"
+    COLORS.tick_text = "#292929"
     COLORS.tick_stripe1 = COLORS.prim1_clr  # "rgba(130, 130, 130, 0.6)"  # day
     COLORS.tick_stripe2 = "rgba(130, 130, 130, 0.4)"  # major
     COLORS.tick_stripe3 = "rgba(130, 130, 130, 0.08)"  # minor

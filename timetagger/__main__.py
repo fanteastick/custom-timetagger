@@ -82,24 +82,36 @@ async def main_handler(request):
     worker won't interfere with other stuff you might serve on localhost.
     """
 
-    if request.path == "/":
-        return 307, {"Location": "/timetagger/"}, b""  # Redirect
+    # Accept requests both at the domain root and under /timetagger/.
+    # Normalize the incoming path by removing an optional leading
+    # '/timetagger' prefix so the app can be hosted at the root or
+    # in a subpath without requiring redirects.
+    p = request.path
+    if p.startswith("/timetagger/"):
+        p = p[len("/timetagger") :]
 
-    elif request.path.startswith("/timetagger/"):
-        if request.path == "/timetagger/status":
-            return 200, {}, "ok"
-        elif request.path.startswith("/timetagger/api/v2/"):
-            path = request.path[19:].strip("/")
-            return await api_handler(request, path)
-        elif request.path.startswith("/timetagger/app/"):
-            path = request.path[16:].strip("/")
-            return await app_asset_handler(request, path)
-        else:
-            path = request.path[12:].strip("/")
-            return await web_asset_handler(request, path)
+    # Now route based on the normalized path `p`.
+    if p == "" or p == "/":
+        # Serve the main app index (previously '/timetagger/')
+        # Map to the web assets handler with empty path which will
+        # return the index page.
+        path = ""
+        return await web_asset_handler(request, path)
 
+    if p == "/status":
+        return 200, {}, "ok"
+    elif p.startswith("/api/v2/"):
+        path = p[len("/api/v2/") :].strip("/")
+        return await api_handler(request, path)
+    elif p.startswith("/app/"):
+        path = p[len("/app/") :].strip("/")
+        return await app_asset_handler(request, path)
     else:
-        return 404, {}, "only serving at /timetagger/"
+        path = p.strip("/")
+        return await web_asset_handler(request, path)
+
+    # If not matched above, web_asset_handler will have already handled
+    # most cases; fall through to a 404 for anything unexpected.
 
 
 async def api_handler(request, path):
