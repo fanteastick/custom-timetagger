@@ -676,17 +676,17 @@ class StartStopEdit:
         <span><i class='fas' style='color:#999; vertical-align:middle;'>\uf144</i></span>
             <input type='date' step='1'  style='font-size: 16px;' />
             <span style='display: flex;'>
-                <input type='text' style='flex:1; min-width: 50px; font-size: 16px;' />
-                <button type='button' style='width:2em; margin-left:-1px;'>+</button>
+                <input type='text' style='flex:1; min-width: 50px; font-size: 16px;'/>
                 <button type='button' style='width:2em; margin-left:-1px;'>-</button>
+                <button type='button' style='width:2em; margin-left:-1px;'>+</button>
                 </span>
             <span></span>
         <span><i class='fas' style='color:#999; vertical-align:middle;'>\uf28d</i></span>
             <input type='date' step='1' style='font-size: 16px;' />
             <span style='display: flex;'>
-                <input type='text' style='flex:1; min-width: 50px; font-size: 16px;' />
-                <button type='button' style='width:2em; margin-left:-1px;'>+</button>
+                <input type='text' style='flex:1; min-width: 50px; font-size: 16px;'/>
                 <button type='button' style='width:2em; margin-left:-1px;'>-</button>
+                <button type='button' style='width:2em; margin-left:-1px;'>+</button>
                 </span>
             <span></span>
         <span><i class='fas' style='color:#999; vertical-align:middle;'>\uf2f2</i></span>
@@ -718,8 +718,10 @@ class StartStopEdit:
             _,
         ) = self.gridnode.children
 
-        self.time1input, self.time1more, self.time1less = self.time1stuff.children
-        self.time2input, self.time2more, self.time2less = self.time2stuff.children
+        # Children order for the time fields is: input, -, +  (we map
+        # variables so names match semantics: time1more is the plus button)
+        self.time1input, self.time1less, self.time1more = self.time1stuff.children
+        self.time2input, self.time2less, self.time2more = self.time2stuff.children
 
         # Tweaks
         for but in (self.time1less, self.time1more, self.time2less, self.time2more):
@@ -2504,6 +2506,7 @@ class TagRenameDialog(BaseDialog):
             for tag in self._tags1:
                 if tag not in tags:
                     all_ok = False
+                    break
             if all_ok:
                 records.push([record.t1, record.key])
 
@@ -2938,16 +2941,19 @@ class ReportDialog(BaseDialog):
         date_button.onclick = self._user_chose_date
         #
         grouping = window.simplesettings.get("report_grouping")
+        
         self._grouping_select.value = grouping
         groupperiod = window.simplesettings.get("report_groupperiod")
         self._groupperiod_select.value = groupperiod
         hidesecondary = window.simplesettings.get("report_hidesecondary")
         self._hidesecondary_but.checked = hidesecondary
         format = window.simplesettings.get("report_format")
+        
         self._format_but.value = format
         showrecords = window.simplesettings.get("report_showrecords")
         self._showrecords_but.checked = showrecords
         #
+        
         self._grouping_select.onchange = self._on_setting_changed
         self._groupperiod_select.onchange = self._on_setting_changed
         self._hidesecondary_but.oninput = self._on_setting_changed
@@ -3569,6 +3575,532 @@ class ExportDialog(BaseDialog):
 
     def _reset_copy_but_text(self):
         self._copy_but.innerHTML = "Copy export-table <i class='fas'>\uf0ea</i>"
+
+    def _get_export_filename(self, ext):
+        date1 = self._t1_date.replace("-", "")
+        date2 = self._t2_date.replace("-", "")
+        if date1 == date2:
+            return f"timetagger-{date1}.{ext}"
+        else:
+            return f"timetagger-{date1}-{date2}.{ext}"
+
+    def _save_as_csv(self):
+        # This is all pretty straightforward. The most tricky bit it
+        # the ds (description). It can have any Unicode, so it should
+        # surrounded by double quotes. Any double-quotes inside the ds
+        # must be escaped by doubling them. And finally, don't put space
+        # after comma's, or tools like Excel may not be able to parse
+        # the quoted string correctly. Note that in _generate_table_rows
+        # the ds is stipped from \t\r\n.
+
+        rows = self._generate_table_rows(self._last_t1, self._last_t2)
+
+        lines = []
+        lines.append(
+            "subtotals,tag_groups,duration,date,start,stop,description,user,tags"
+        )
+        lines.append("")
+
+        user = ""  # noqa
+        if window.store.get_auth:
+            auth = window.store.get_auth()
+            if auth:
+                user = auth.username  # noqa
+
+        for row in rows:
+            if row[0] == "blank":
+                lines.append(",,,,,,,,")
+            elif row[0] == "head":
+                lines.append(RawJS('row[1] + "," + row[2] + ",,,,,,,"'))
+            elif row[0] == "record":
+                _, key, duration, sd1, st1, st2, ds, tagz = row
+                ds = '"' + ds.replace('"', '""') + '"'
+                lines.append(
+                    RawJS(
+                        """',,' + duration + ',' + sd1 + ',' + st1 + ',' + st2 + ',' + ds + ',' + user + ',' + tagz"""
+                    )
+                )
+
+        # Get blob wrapped in an object url
+        obj_url = window.URL.createObjectURL(
+            window.Blob(["\r\n".join(lines)], {"type": "text/csv"})
+        )
+        # Create a element to attach the download to
+        a = document.createElement("a")
+        a.style.display = "none"
+        a.setAttribute("download", self._get_export_filename("csv"))
+        a.href = obj_url
+        document.body.appendChild(a)
+        # Trigger the download by simulating click
+        a.click()
+        # Cleanup
+        window.URL.revokeObjectURL(a.href)
+        document.body.removeChild(a)
+
+    def _save_as_pdf(self):
+        # Configure
+        width, height = 210, 297  # A4
+        margin = 20  # mm
+        showrecords = self._showrecords_but.checked
+        rowheight = 6
+        rowheight2 = rowheight / 2
+        rowskip = 3
+        coloffsets = 15, 4, 17, 10, 10
+
+        # Get row data and divide in chunks. This is done so that we
+        # can break pages earlier to avoid breaking chunks.
+        rows = self._generate_table_rows(self._last_t1, self._last_t2)
+        chunks = [[]]
+        for row in rows:
+            if row[0] == "blank":
+                chunks.append([])
+            else:
+                chunks[-1].append(row)
+
+        # Initialize the document
+        doc = window.jsPDF()
+        doc.setFont("Ubuntu-C")
+
+        # Draw preamble
+        doc.setFontSize(24)
+        doc.text("Time record report", margin, margin, {"baseline": "top"})
+        img = document.getElementById("ttlogo_bd")
+        doc.addImage(img, "PNG", width - margin - 30, margin, 30, 30)
+        # doc.setFontSize(12)
+        # doc.text(
+        #     "TimeTagger",
+        #     width - margin,
+        #     margin + 22,
+        #     {"align": "right", "baseline": "top"},
+        # )
+
+        tagname = self._tags.join(" ") if self._tags else "all"
+        d1 = dt.format_isodate(self._t1_date)
+        d2 = dt.format_isodate(self._t2_date)
+        doc.setFontSize(11)
+        doc.text("Tags:  ", margin + 20, margin + 15, {"align": "right"})
+        doc.text(tagname, margin + 20, margin + 15)
+        doc.text("From:  ", margin + 20, margin + 20, {"align": "right"})
+        doc.text(d1, margin + 20, margin + 20)
+        doc.text("Until:  ", margin + 20, margin + 25, {"align": "right"})
+        doc.text(d2, margin + 20, margin + 25)
+
+        # Prepare drawing table
+        doc.setFontSize(10)
+        left_middle = {"align": "left", "baseline": "middle"}
+        right_middle = {"align": "right", "baseline": "middle"}
+        y = margin + 35
+
+        # Draw table
+        npages = 1
+        for chunknr in range(len(chunks)):
+            # Maybe insert a page break early to preserve whole chunks
+            space_used = y - margin
+            space_total = height - 2 * margin
+            if space_used > 0.9 * space_total:
+                rowsleft = sum([len(chunk) for chunk in chunks[chunknr:]])
+                space_needed = rowsleft * rowheight
+                space_needed += (len(chunks) - chunknr) * rowskip
+                if space_needed > space_total - space_used:
+                    doc.addPage()
+                    npages += 1
+                    y = margin
+
+            for rownr, row in enumerate(chunks[chunknr]):
+                # Add page break?
+                if (y + rowheight) > (height - margin):
+                    doc.addPage()
+                    npages += 1
+                    y = margin
+
+                if row[0] == "head":
+                    if showrecords:
+                        doc.setFillColor("#ccc")
+                    else:
+                        doc.setFillColor("#f3f3f3" if rownr % 2 else "#eaeaea")
+                    doc.rect(margin, y, width - 2 * margin, rowheight, "F")
+                    # Duration
+                    doc.setTextColor("#000")
+                    x = margin + coloffsets[0]
+                    doc.text(row[1], x, y + rowheight2, right_middle)  # duration
+                    # Tag names, add structure via color, no padding
+                    basename, lastname = "", row[2]
+                    doc.setTextColor("#555")
+                    x += coloffsets[1]
+                    doc.text(basename, x, y + rowheight2, left_middle)
+                    doc.setTextColor("#000")
+                    x += doc.getTextWidth(basename)
+                    doc.text(lastname, x, y + rowheight2, left_middle)
+
+                elif row[0] == "record":
+                    doc.setFillColor("#f3f3f3" if rownr % 2 else "#eaeaea")
+                    doc.rect(margin, y, width - 2 * margin, rowheight, "F")
+                    doc.setTextColor("#000")
+                    # _, key, duration, sd1, st1, st2, ds, tagz = row
+                    # The duration is right-aligned
+                    x = margin + coloffsets[0]
+                    doc.text(row[2], x, y + rowheight2, right_middle)
+                    # The rest (sd1, st1, st2) is left-aligned
+                    for i in (1, 2, 3):
+                        x += coloffsets[i]
+                        s = row[i + 2]
+                        if i == 3:  # st2
+                            doc.text("-", x - 1, y + rowheight2, right_middle)
+                        doc.text(s, x, y + rowheight2, left_middle)
+                    # The description may be so long we need to split it
+                    x += coloffsets[4]
+                    min_x = x
+                    max_x = width - margin
+                    ds = row[6]
+                    if x + doc.getTextWidth(ds) <= max_x:
+                        doc.text(ds, x, y + rowheight2, left_middle)
+                    else:
+                        w_space = doc.getTextWidth(" ")
+                        for word in ds.split(" "):
+                            w = doc.getTextWidth(word)
+                            if x + w > max_x:  # need new line
+                                x = min_x
+                                y += rowheight
+                                doc.setFillColor("#f3f3f3" if rownr % 2 else "#eaeaea")
+                                doc.rect(margin, y, width - 2 * margin, rowheight, "F")
+                                doc.setTextColor("#000")
+                            doc.text(word, x, y + rowheight2, left_middle)
+                            x += w + w_space
+                else:
+                    doc.setFillColor("#ffeeee")
+                    doc.rect(margin, y, width - 2 * margin, rowheight, "F")
+
+                y += rowheight
+            y += rowskip
+
+        # Add pagination
+        doc.setFontSize(8)
+        doc.setTextColor("#555")
+        for i in range(npages):
+            pagenr = i + 1
+            doc.setPage(pagenr)
+            x, y = width - 0.5 * margin, 0.5 * margin
+            doc.text(f"{pagenr}/{npages}", x, y, {"align": "right", "baseline": "top"})
+
+        doc.save(self._get_export_filename("pdf"))
+        # doc.output('dataurlnewwindow')  # handy during dev
+
+
+class ExportDialog(BaseDialog):
+    """Dialog to export data."""
+
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        self._dtformat = "local"
+        self._working = 0
+
+    def open(self, callback=None):
+        self.maindiv.innerHTML = f"""
+            <h1><i class='fas'>\uf56e</i>&nbsp;&nbsp;Export
+                <button type='button'><i class='fas'>\uf00d</i></button>
+            </h1>
+            <p>
+            The table below contains all your records. This can be
+            useful for backups, processing, or to move your data
+            elsewhere.
+            </p><p>&nbsp;</p>
+            <div>
+                <span>Date-time format:</span>
+                &nbsp;<input type="radio" name="dtformat" value="local" checked> Local</input>
+                &nbsp;<input type="radio" name="dtformat" value="unix"> Unix</input>
+                &nbsp;<input type="radio" name="dtformat" value="iso"> ISO 8601</input>
+            </div>
+            <button type='button'>Copy</button>
+            <hr />
+            <table id='export_table'></table>
+            """
+
+        self._table_element = self.maindiv.children[-1]
+        self._table_element.classList.add("darkheaders")
+
+        self._copy_but = self.maindiv.children[-3]
+        self._copy_but.onclick = self._copy_clipboard
+        self._copy_but.disabled = True
+
+        radio_buttons = self.maindiv.children[-4].children
+        for i in range(1, len(radio_buttons)):
+            but = radio_buttons[i]
+            but.onchange = self._on_dtformat
+
+        self._cancel_but = self.maindiv.children[0].children[-1]
+        self._cancel_but.onclick = self.close
+        super().open(callback)
+
+        self.fill_records()
+
+    def _on_dtformat(self, e):
+        self._dtformat = e.target.value
+        
+        self.fill_records()
+
+    async def fill_records(self):
+        self._working += 1
+        working = self._working
+        await window.tools.sleepms(100)
+
+        # Prepare
+        self._copy_but.disabled = True
+        itemsdict = window.store.records._items
+        lines = []
+
+        # Add header
+        lineparts = ["key", "start", "stop", "tags", "description"]
+        lines.append("<tr><th>" + lineparts.join("</th><th>") + "</th></tr>")
+
+        # Parse all items
+        # Take care that description does not have newlines or tabs, using to_str
+        # With tab-separated values it is not common to surround values in quotes.
+        for key in itemsdict.keys():
+            item = itemsdict[key]
+            if not window.stores.is_hidden(item):
+                t1, t2 = item.t1, item.t2
+                if self._dtformat == "local":
+                    t1, t2 = dt.time2localstr(t1), dt.time2localstr(t2)
+                elif self._dtformat == "iso":
+                    t1, t2 = dt.time2str(t1, 0), dt.time2str(t2, 0)
+                lineparts = [
+                    item.key,
+                    t1,
+                    t2,
+                    utils.get_tags_and_parts_from_string(item.ds)[0].join(" "),
+                    to_str(item.get("ds", "")),
+                ]
+                lines.append("<tr><td>" + lineparts.join("</td><td>") + "</td></tr>")
+            # Give feedback while processing
+            if len(lines) % 256 == 0:
+                self._copy_but.innerHTML = "Found " + len(lines) + " records"
+                # self._table_element.innerHTML = lines.join("\n")
+                await window.tools.sleepms(1)
+            if working != self._working:
+                return
+
+        # Done
+        self._copy_but.innerHTML = "Copy export-table <i class='fas'>\uf0ea</i>"
+        self._table_element.innerHTML = lines.join("\n")
+        self._copy_but.disabled = False
+
+    def _copy_clipboard(self):
+        table = self.maindiv.children[-1]
+        tools.copy_dom_node(table)
+        self._copy_but.innerHTML = "Copy export-table <i class='fas'>\uf46c</i>"
+        window.setTimeout(self._reset_copy_but_text, 800)
+
+    def _reset_copy_but_text(self):
+        self._copy_but.innerHTML = "Copy export-table <i class='fas'>\uf0ea</i>"
+
+    def _get_export_filename(self, ext):
+        date1 = self._t1_date.replace("-", "")
+        date2 = self._t2_date.replace("-", "")
+        if date1 == date2:
+            return f"timetagger-{date1}.{ext}"
+        else:
+            return f"timetagger-{date1}-{date2}.{ext}"
+
+    def _save_as_csv(self):
+        # This is all pretty straightforward. The most tricky bit it
+        # the ds (description). It can have any Unicode, so it should
+        # surrounded by double quotes. Any double-quotes inside the ds
+        # must be escaped by doubling them. And finally, don't put space
+        # after comma's, or tools like Excel may not be able to parse
+        # the quoted string correctly. Note that in _generate_table_rows
+        # the ds is stipped from \t\r\n.
+
+        rows = self._generate_table_rows(self._last_t1, self._last_t2)
+
+        lines = []
+        lines.append(
+            "subtotals,tag_groups,duration,date,start,stop,description,user,tags"
+        )
+        lines.append("")
+
+        user = ""  # noqa
+        if window.store.get_auth:
+            auth = window.store.get_auth()
+            if auth:
+                user = auth.username  # noqa
+
+        for row in rows:
+            if row[0] == "blank":
+                lines.append(",,,,,,,,")
+            elif row[0] == "head":
+                lines.append(RawJS('row[1] + "," + row[2] + ",,,,,,,"'))
+            elif row[0] == "record":
+                _, key, duration, sd1, st1, st2, ds, tagz = row
+                ds = '"' + ds.replace('"', '""') + '"'
+                lines.append(
+                    RawJS(
+                        """',,' + duration + ',' + sd1 + ',' + st1 + ',' + st2 + ',' + ds + ',' + user + ',' + tagz"""
+                    )
+                )
+
+        # Get blob wrapped in an object url
+        obj_url = window.URL.createObjectURL(
+            window.Blob(["\r\n".join(lines)], {"type": "text/csv"})
+        )
+        # Create a element to attach the download to
+        a = document.createElement("a")
+        a.style.display = "none"
+        a.setAttribute("download", self._get_export_filename("csv"))
+        a.href = obj_url
+        document.body.appendChild(a)
+        # Trigger the download by simulating click
+        a.click()
+        # Cleanup
+        window.URL.revokeObjectURL(a.href)
+        document.body.removeChild(a)
+
+    def _save_as_pdf(self):
+        # Configure
+        width, height = 210, 297  # A4
+        margin = 20  # mm
+        showrecords = self._showrecords_but.checked
+        rowheight = 6
+        rowheight2 = rowheight / 2
+        rowskip = 3
+        coloffsets = 15, 4, 17, 10, 10
+
+        # Get row data and divide in chunks. This is done so that we
+        # can break pages earlier to avoid breaking chunks.
+        rows = self._generate_table_rows(self._last_t1, self._last_t2)
+        chunks = [[]]
+        for row in rows:
+            if row[0] == "blank":
+                chunks.append([])
+            else:
+                chunks[-1].append(row)
+
+        # Initialize the document
+        doc = window.jsPDF()
+        doc.setFont("Ubuntu-C")
+
+        # Draw preamble
+        doc.setFontSize(24)
+        doc.text("Time record report", margin, margin, {"baseline": "top"})
+        img = document.getElementById("ttlogo_bd")
+        doc.addImage(img, "PNG", width - margin - 30, margin, 30, 30)
+        # doc.setFontSize(12)
+        # doc.text(
+        #     "TimeTagger",
+        #     width - margin,
+        #     margin + 22,
+        #     {"align": "right", "baseline": "top"},
+        # )
+
+        tagname = self._tags.join(" ") if self._tags else "all"
+        d1 = dt.format_isodate(self._t1_date)
+        d2 = dt.format_isodate(self._t2_date)
+        doc.setFontSize(11)
+        doc.text("Tags:  ", margin + 20, margin + 15, {"align": "right"})
+        doc.text(tagname, margin + 20, margin + 15)
+        doc.text("From:  ", margin + 20, margin + 20, {"align": "right"})
+        doc.text(d1, margin + 20, margin + 20)
+        doc.text("Until:  ", margin + 20, margin + 25, {"align": "right"})
+        doc.text(d2, margin + 20, margin + 25)
+
+        # Prepare drawing table
+        doc.setFontSize(10)
+        left_middle = {"align": "left", "baseline": "middle"}
+        right_middle = {"align": "right", "baseline": "middle"}
+        y = margin + 35
+
+        # Draw table
+        npages = 1
+        for chunknr in range(len(chunks)):
+            # Maybe insert a page break early to preserve whole chunks
+            space_used = y - margin
+            space_total = height - 2 * margin
+            if space_used > 0.9 * space_total:
+                rowsleft = sum([len(chunk) for chunk in chunks[chunknr:]])
+                space_needed = rowsleft * rowheight
+                space_needed += (len(chunks) - chunknr) * rowskip
+                if space_needed > space_total - space_used:
+                    doc.addPage()
+                    npages += 1
+                    y = margin
+
+            for rownr, row in enumerate(chunks[chunknr]):
+                # Add page break?
+                if (y + rowheight) > (height - margin):
+                    doc.addPage()
+                    npages += 1
+                    y = margin
+
+                if row[0] == "head":
+                    if showrecords:
+                        doc.setFillColor("#ccc")
+                    else:
+                        doc.setFillColor("#f3f3f3" if rownr % 2 else "#eaeaea")
+                    doc.rect(margin, y, width - 2 * margin, rowheight, "F")
+                    # Duration
+                    doc.setTextColor("#000")
+                    x = margin + coloffsets[0]
+                    doc.text(row[1], x, y + rowheight2, right_middle)  # duration
+                    # Tag names, add structure via color, no padding
+                    basename, lastname = "", row[2]
+                    doc.setTextColor("#555")
+                    x += coloffsets[1]
+                    doc.text(basename, x, y + rowheight2, left_middle)
+                    doc.setTextColor("#000")
+                    x += doc.getTextWidth(basename)
+                    doc.text(lastname, x, y + rowheight2, left_middle)
+
+                elif row[0] == "record":
+                    doc.setFillColor("#f3f3f3" if rownr % 2 else "#eaeaea")
+                    doc.rect(margin, y, width - 2 * margin, rowheight, "F")
+                    doc.setTextColor("#000")
+                    # _, key, duration, sd1, st1, st2, ds, tagz = row
+                    # The duration is right-aligned
+                    x = margin + coloffsets[0]
+                    doc.text(row[2], x, y + rowheight2, right_middle)
+                    # The rest (sd1, st1, st2) is left-aligned
+                    for i in (1, 2, 3):
+                        x += coloffsets[i]
+                        s = row[i + 2]
+                        if i == 3:  # st2
+                            doc.text("-", x - 1, y + rowheight2, right_middle)
+                        doc.text(s, x, y + rowheight2, left_middle)
+                    # The description may be so long we need to split it
+                    x += coloffsets[4]
+                    min_x = x
+                    max_x = width - margin
+                    ds = row[6]
+                    if x + doc.getTextWidth(ds) <= max_x:
+                        doc.text(ds, x, y + rowheight2, left_middle)
+                    else:
+                        w_space = doc.getTextWidth(" ")
+                        for word in ds.split(" "):
+                            w = doc.getTextWidth(word)
+                            if x + w > max_x:  # need new line
+                                x = min_x
+                                y += rowheight
+                                doc.setFillColor("#f3f3f3" if rownr % 2 else "#eaeaea")
+                                doc.rect(margin, y, width - 2 * margin, rowheight, "F")
+                                doc.setTextColor("#000")
+                            doc.text(word, x, y + rowheight2, left_middle)
+                            x += w + w_space
+                else:
+                    doc.setFillColor("#ffeeee")
+                    doc.rect(margin, y, width - 2 * margin, rowheight, "F")
+
+                y += rowheight
+            y += rowskip
+
+        # Add pagination
+        doc.setFontSize(8)
+        doc.setTextColor("#555")
+        for i in range(npages):
+            pagenr = i + 1
+            doc.setPage(pagenr)
+            x, y = width - 0.5 * margin, 0.5 * margin
+            doc.text(f"{pagenr}/{npages}", x, y, {"align": "right", "baseline": "top"})
+
+        doc.save(self._get_export_filename("pdf"))
+        # doc.output('dataurlnewwindow')  # handy during dev
 
 
 class ImportDialog(BaseDialog):
