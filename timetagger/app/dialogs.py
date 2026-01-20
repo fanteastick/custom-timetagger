@@ -690,9 +690,13 @@ class StartStopEdit:
                 </span>
             <span></span>
         <span><i class='fas' style='color:#999; vertical-align:middle;'>\uf2f2</i></span>
-            <span></span>
+            <span>Total time</span>
             <input type='text' style='flex: 1; min-width: 50px; font-size: 16px' />
-            <span></span>
+            <span>
+                <button type='button' data-quick='15' style='width:3em; padding:0.2em 0.4em; margin-left:6px;'>15m</button>
+                <button type='button' data-quick='30' style='width:3em; padding:0.2em 0.4em; margin-left:6px;'>30m</button>
+                <button type='button' data-quick='60' style='width:3em; padding:0.2em 0.4em; margin-left:6px;'>1h</button>
+            </span>
         </div>
         """
 
@@ -755,6 +759,33 @@ class StartStopEdit:
             # Being defensive: if the DOM shape changed, don't crash.
             pass
 
+        # Wire up quick-set buttons for duration (15m / 30m)
+        try:
+            # Find all buttons under the grid node and attach handlers
+            btns = self.gridnode.getElementsByTagName("button")
+            for i in range(len(btns)):
+                try:
+                    b = btns[i]
+                    dq = b.getAttribute("data-quick")
+                    if dq:
+                        mins = int(dq)
+
+                        def _make_cb(m):
+                            def _cb(e):
+                                # Use hours when it's a whole hour, otherwise minutes
+                                if m % 60 == 0:
+                                    self.durationinput.value = f"{m//60}h"
+                                else:
+                                    self.durationinput.value = f"{m}m"
+                                self.onchanged("duration")
+
+                            return _cb
+
+                        b.onclick = _make_cb(mins)
+                except Exception:
+                    continue
+        except Exception:
+            pass
         # Styling
         self.gridnode.style.display = "grid"
         self.gridnode.style.gridTemplateColumns = "auto 140px 140px 2fr"
