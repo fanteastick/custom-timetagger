@@ -909,8 +909,14 @@ class StartStopEdit:
             show_subnode(i, not self.radio_startnow.checked)
         for i in range(4, 8):
             show_subnode(i, self.radio_finished.checked)
-        for i in range(8, 12):
+        # For the duration row (indices 8-11) keep most controls visible
+        # when not in 'start now'. However, the quick-duration buttons
+        # (the last subnode, index 11) should only appear when the record
+        # is finished/stopped (i.e. the "Already done" / "Stopped" page).
+        for i in range(8, 11):
             show_subnode(i, not self.radio_startnow.checked)
+        # Quick-duration buttons (15m/30m/1h) only on finished/stopped.
+        show_subnode(11, self.radio_finished.checked)
 
     def _update_duration(self, force=False):
         is_running = self.ori_t1 == self.ori_t2
