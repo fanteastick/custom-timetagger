@@ -1500,8 +1500,14 @@ class Autocompleter:
             item = document.createElement("div")
             item.classList.add("tag-suggestion")
             item.innerHTML = html
-            onclick = f"window._autocomp_finish(event, {i});"
-            item.setAttribute("onmousedown", onclick)
+            def _make_click_handler(index, completer):
+                def _handler(e):
+                    completer._finish_cb(e, index)
+                    if e and e.stopPropagation:
+                        e.stopPropagation()
+                        e.preventDefault()
+                return _handler
+            item.onmousedown = _make_click_handler(i, self)
             self._div.appendChild(item)
         # Show
         self._div.hidden = False
@@ -1649,6 +1655,262 @@ class Autocompleter:
             tag_list.push((tag, tag_t2))
         tag_list.sort(key=lambda x: x[0])
         return tag_list
+
+
+class BulkRecordDialog(BaseDialog):
+    """Dialog for adding up to five timed activities in one go."""
+
+    def open(self, callback=None):
+        self.maindiv.innerHTML = f"""
+            <h1><i class='fas'>\uf0fe</i>&nbsp;&nbsp;Bulk entry
+                <button type='button'><i class='fas'>\uf00d</i></button>
+            </h1>
+            <div style='display:grid; grid-template-columns: 1fr 1fr 2fr; gap:8px; font-weight:bold; margin-bottom:6px;'>
+                <span>Start</span>
+                <span>Stop</span>
+                <span>Activity</span>
+            </div>
+            <div></div>
+            <div style='display:flex;justify-content:flex-end; margin: 0.5em 0 0.75em 0;'>
+                <button type='button' class='actionbutton' id='bulk-snap-today'><i class='fas'>\uf2f1</i>&nbsp;&nbsp;Snap all to today</button>
+                <button type='button' class='actionbutton' id='bulk-consecutive-mode'><i class='fas'>\uf0c1</i>&nbsp;&nbsp;Consecutive mode</button>
+            </div>
+            <div style='margin-top:2em;'></div>
+            <div style='display:flex;justify-content:flex-end;'>
+                <button type='button' class='actionbutton'><i class='fas'>\uf00d</i>&nbsp;&nbsp;Cancel</button>
+                <button type='button' class='actionbutton submit'><i class='fas'>\uf24d</i>&nbsp;&nbsp;Save</button>
+            </div>
+        """
+
+        self._rows_div = self.maindiv.children[2]
+        self._snap_today_but = self.maindiv.children[3].children[0]
+        self._consecutive_but = self.maindiv.children[3].children[1]
+        self._cancel_but = self.maindiv.children[-1].children[0]
+        self._submit_but = self.maindiv.children[-1].children[1]
+        self._rows = []
+
+        for i in range(5):
+            row = document.createElement("div")
+            row.classList.add("container")
+            row.style.display = "grid"
+            row.style.gridTemplateColumns = "1fr 1fr 2fr"
+            row.style.gap = "8px"
+            row.style.marginBottom = "6px"
+            row.style.position = "relative"
+
+            start_in = document.createElement("input")
+            start_in.type = "datetime-local"
+            start_in.style.width = "100%"
+            start_in.setAttribute("placeholder", "Start")
+
+            stop_in = document.createElement("input")
+            stop_in.type = "datetime-local"
+            stop_in.style.width = "100%"
+            stop_in.setAttribute("placeholder", "Stop")
+
+            activity_wrap = document.createElement("div")
+            activity_wrap.style.position = "relative"
+            ds_in = document.createElement("input")
+            ds_in.type = "text"
+            ds_in.style.width = "100%"
+            ds_in.setAttribute("placeholder", "Activity")
+            ds_in.setAttribute("spellcheck", "true")
+
+            suggestion_div = document.createElement("div")
+            suggestion_div.classList.add("tag-suggestions-autocomp")
+            suggestion_div.hidden = True
+            suggestion_div.style.position = "absolute"
+            suggestion_div.style.left = "3px"
+            suggestion_div.style.right = "3px"
+            suggestion_div.style.top = "100%"
+            suggestion_div.style.zIndex = "20"
+
+            activity_wrap.appendChild(ds_in)
+            activity_wrap.appendChild(suggestion_div)
+
+            def _bind_activity_handlers(ds_in, suggestion_div):
+                def _on_activity_focus(e=None):
+                    self._update_recent_activity_suggestions(ds_in, suggestion_div)
+
+                def _on_activity_input(e=None):
+                    self._update_recent_activity_suggestions(ds_in, suggestion_div)
+
+                def _on_activity_key(e):
+                    self._handle_activity_key(ds_in, suggestion_div, e)
+
+                ds_in.onfocus = _on_activity_focus
+                ds_in.oninput = _on_activity_input
+                ds_in.onkeydown = _on_activity_key
+
+            _bind_activity_handlers(ds_in, suggestion_div)
+
+            row.appendChild(start_in)
+            row.appendChild(stop_in)
+            row.appendChild(activity_wrap)
+            self._rows_div.appendChild(row)
+            self._rows.append((start_in, stop_in, ds_in, suggestion_div))
+
+        self._cancel_but.onclick = self.close
+        self._submit_but.onclick = self.submit_soon
+        self._snap_today_but.onclick = self._snap_all_to_today
+        self._consecutive_but.onclick = self._apply_consecutive_mode
+        self.maindiv.addEventListener("click", self._clear_autocompletion)
+
+        super().open(callback)
+        if utils.looks_like_desktop():
+            self._rows[0][0].focus()
+
+    def _set_value_date_to_today(self, input_el):
+        cur = to_str(input_el.value or "").strip()
+        if not cur:
+            d = window.Date()
+            year = d.getFullYear()
+            month = str(d.getMonth() + 1)
+            if len(month) == 1:
+                month = "0" + month
+            day = str(d.getDate())
+            if len(day) == 1:
+                day = "0" + day
+            input_el.value = f"{year}-{month}-{day}T00:00"
+            return
+
+        if "T" in cur:
+            date_part, time_part = cur.split("T", 1)
+        else:
+            date_part, time_part = cur, "00:00"
+
+        d = window.Date()
+        year = d.getFullYear()
+        month = str(d.getMonth() + 1)
+        if len(month) == 1:
+            month = "0" + month
+        day = str(d.getDate())
+        if len(day) == 1:
+            day = "0" + day
+
+        input_el.value = f"{year}-{month}-{day}T{time_part}"
+
+    def _snap_all_to_today(self):
+        for start_in, stop_in, ds_in, suggestion_div in self._rows:
+            self._set_value_date_to_today(start_in)
+            self._set_value_date_to_today(stop_in)
+
+    def _apply_consecutive_mode(self):
+        # Ensure every row has a valid Start value
+        starts = []
+        for i in range(len(self._rows)):
+            start_in, stop_in, ds_in, suggestion_div = self._rows[i]
+            start_value = to_str(start_in.value or "").strip()
+            if not start_value:
+                window.alert("Consecutive mode requires a Start value in every row.")
+                return
+            start_t = self._parse_time(start_value)
+            if start_t is None:
+                window.alert("Consecutive mode requires valid Start date-times in every row.")
+                return
+            starts.append(start_t)
+        # Set each End (except last) to the next row's Start
+        for i in range(len(self._rows) - 1):
+            _, stop_in, _, _ = self._rows[i]
+            next_start_t = starts[i + 1]
+            stop_in.value = dt.time2localstr(next_start_t).replace(" ", "T")[:16]
+
+    def _get_recent_activities(self, needle=""):
+        needle = to_str(needle or "").strip().lower()
+        ds_list = []
+        t2 = dt.now()
+        t1 = t2 - 12 * 7 * 24 * 3600
+        for record in window.store.records.get_records(t1, t2).values():
+            ds = to_str(record.ds or "").strip()
+            if ds and ds not in ds_list:
+                if not needle or needle in ds.lower():
+                    ds_list.append(ds)
+        return ds_list
+
+    def _update_recent_activity_suggestions(self, ds_in, suggestion_div):
+        needle = to_str(ds_in.value or "").strip()
+        suggestions = self._get_recent_activities(needle)
+        suggestion_div.innerHTML = ""
+        if not needle or len(suggestions) == 0:
+            suggestion_div.hidden = True
+            return
+        for ds in suggestions:
+            item = document.createElement("div")
+            item.classList.add("tag-suggestion")
+            item.innerHTML = ds
+            item.onmousedown = lambda e=None, val=ds, input=ds_in, div=suggestion_div: self._select_activity_suggestion(val, input, div, e)
+            suggestion_div.appendChild(item)
+        suggestion_div.hidden = False
+
+    def _handle_activity_key(self, ds_in, suggestion_div, e):
+        if e and e.key.lower() == "escape":
+            suggestion_div.hidden = True
+            return
+        if e and (e.key.lower() == "arrowdown" or e.key.lower() == "arrowup"):
+            items = suggestion_div.getElementsByClassName("tag-suggestion")
+            if len(items) > 0:
+                e.preventDefault()
+                suggestion_div.focus()
+                return
+
+    def _select_activity_suggestion(self, value, ds_in, suggestion_div, e=None):
+        ds_in.value = value
+        suggestion_div.hidden = True
+        suggestion_div.innerHTML = ""
+        if e and e.stopPropagation:
+            e.stopPropagation()
+            e.preventDefault()
+
+    def _clear_autocompletion(self, e=None):
+        for start_in, stop_in, ds_in, suggestion_div in self._rows:
+            suggestion_div.hidden = True
+            suggestion_div.innerHTML = ""
+
+    def _parse_time(self, value):
+        value = to_str(value or "").strip()
+        if not value:
+            return None
+        try:
+            value = value.replace(" ", "T")
+            if value.count(":") == 1:
+                value += ":00"
+            return dt.to_time_int(value)
+        except Exception:
+            return None
+
+    def submit(self):
+        records = []
+        for start_in, stop_in, ds_in, suggestion_div in self._rows:
+            start_value = to_str(start_in.value or "").strip()
+            stop_value = to_str(stop_in.value or "").strip()
+            ds_value = to_str(ds_in.value or "").strip()
+
+            if not start_value and not stop_value and not ds_value:
+                continue
+
+            start_t = self._parse_time(start_value)
+            stop_t = self._parse_time(stop_value)
+            if start_t is None or stop_t is None:
+                continue
+
+            if start_t > stop_t:
+                start_t, stop_t = stop_t, start_t
+
+            record = window.store.records.create(start_t, stop_t)
+            _, parts = utils.get_tags_and_parts_from_string(ds_value)
+            record.ds = parts.join("")
+            if not record.ds:
+                record.pop("ds", None)
+            records.append(record)
+
+        if len(records) == 0:
+            self.close()
+            return
+
+        for record in records:
+            window.store.records.put(record)
+
+        super().submit(records)
 
 
 class RecordDialog(BaseDialog):

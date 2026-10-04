@@ -169,6 +169,7 @@ class TimeTaggerCanvas(BaseCanvas):
         self.timeselection_dialog = dialogs.TimeSelectionDialog(self)
         self.settings_dialog = dialogs.SettingsDialog(self)
         self.record_dialog = dialogs.RecordDialog(self)
+        self.bulk_record_dialog = dialogs.BulkRecordDialog(self)
         self.tag_combo_dialog = dialogs.TagComboDialog(self)
         self.tag_dialog = dialogs.TagDialog(self)
         self.report_dialog = dialogs.ReportDialog(self)
@@ -1316,6 +1317,19 @@ class TopWidget(Widget):
                 {"ref": "topright", "font": FONT.condensed},
             )
             x -= dx
+            x -= 3
+            dx = self._draw_button(
+                ctx,
+                x,
+                y,
+                None,
+                h,
+                ["fas-\uf0fe", "Bulk"],
+                "record_bulk",
+                "Add multiple records",
+                {"ref": "topright", "font": FONT.condensed},
+            )
+            x -= dx
         else:
             # This but takes more space, but there it no stop but. So no reason
             # to reduce size when avail_width is low.
@@ -1328,6 +1342,19 @@ class TopWidget(Widget):
                 ["fas-\uf04b", "Record"],
                 "record_start",
                 start_tt,
+                {"ref": "topright", "font": FONT.condensed},
+            )
+            x -= dx
+            x -= 3
+            dx = self._draw_button(
+                ctx,
+                x,
+                y,
+                None,
+                h,
+                ["fas-\uf0fe", "Bulk"],
+                "record_bulk",
+                "Add multiple records",
                 {"ref": "topright", "font": FONT.condensed},
             )
             x -= dx
@@ -1550,6 +1577,8 @@ class TopWidget(Widget):
             if action == "record_start":
                 record = window.store.records.create(now, now)
                 self._canvas.record_dialog.open("Start", record, self.update)
+            elif action == "record_bulk":
+                self._canvas.bulk_record_dialog.open(self.update)
             elif action == "record_new":
                 record = window.store.records.create(now - 1800, now)
                 self._canvas.record_dialog.open("New", record, self.update)
