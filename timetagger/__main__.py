@@ -41,7 +41,6 @@ from timetagger.server import (
     enable_service_worker,
 )
 
-
 # Special hooks exit early
 if __name__ == "__main__" and len(sys.argv) >= 2:
     if sys.argv[1] in ("--version", "version"):
@@ -78,40 +77,38 @@ async def main_handler(request):
     """
     The main handler where we delegate to the API or asset handler.
 
-    We serve at /timetagger for a few reasons, one being that the service
-    worker won't interfere with other stuff you might serve on localhost.
+    We serve at config.path_prefix (default /timetagger/) for a few reasons,
+    one being that the service worker won't interfere with other stuff you
+    might serve on localhost. This fork also serves the app at the domain root.
     """
 
-    # Accept requests both at the domain root and under /timetagger/.
-    # Normalize the incoming path by removing an optional leading
-    # '/timetagger' prefix so the app can be hosted at the root or
-    # in a subpath without requiring redirects.
+    prefix = config.path_prefix  # normalized, e.g. "/timetagger/" or "/"
     p = request.path
-    if p.startswith("/timetagger/"):
-        p = p[len("/timetagger") :]
 
-    # Now route based on the normalized path `p`.
-    if p == "" or p == "/":
-        # Serve the main app index (previously '/timetagger/')
-        # Map to the web assets handler with empty path which will
-        # return the index page.
-        path = ""
-        return await web_asset_handler(request, path)
+    # Optionally redirect the root directly to the app
+    if p == "/" and config.app_redirect:
+        return 307, {"Location": f"{prefix}app/"}, b""
+
+    # Custom: serve both under the prefix and at the domain root. Requests
+    # under the prefix are normalized by stripping it.
+    if prefix != "/":
+        if p == prefix.rstrip("/"):
+            return 307, {"Location": prefix}, b""
+        elif p.startswith(prefix):
+            p = p[len(prefix) - 1 :]  # keep the leading slash
 
     if p == "/status":
         return 200, {}, "ok"
     elif p.startswith("/api/v2/"):
-        path = p[len("/api/v2/") :].strip("/")
+        path = p.removeprefix("/api/v2/").strip("/")
         return await api_handler(request, path)
     elif p.startswith("/app/"):
-        path = p[len("/app/") :].strip("/")
+        path = p.removeprefix("/app/").strip("/")
         return await app_asset_handler(request, path)
     else:
+        # The landing page at "/", other pages, or a 404 for unknown paths
         path = p.strip("/")
         return await web_asset_handler(request, path)
-
-    # If not matched above, web_asset_handler will have already handled
-    # most cases; fall through to a 404 for anything unexpected.
 
 
 async def api_handler(request, path):

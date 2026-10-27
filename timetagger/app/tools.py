@@ -3,8 +3,9 @@ A small set of tools for authentication, storage, and communication with the ser
 Or ... the minimum tools to handle the above things.
 """
 
-from pscript.stubs import window, JSON, localStorage, location, console, fetch
+# flake8: noqa: F824
 
+from pscript.stubs import window, JSON, localStorage, location, console, fetch
 
 # %% General
 
@@ -120,6 +121,34 @@ def build_api_url(suffix):
     return url + suffix
 
 
+async def fetch_latest_github_release():
+    """Fetch the latest release version from GitHub.
+
+    Returns:
+        The tag_name of the latest release (e.g., "v25.06.1"), or None if the fetch fails.
+    """
+    try:
+        url = "https://api.github.com/repos/almarklein/timetagger/releases/latest"
+        init = dict(method="GET")
+        res = await fetch(url, init)
+
+        if res.status == 200:
+            data = JSON.parse(await res.text())
+            window.latest_release_version = data.tag_name
+            console.log(f"Loaded latest release from Github: {data.tag_name}")
+            return data.tag_name
+        else:
+            console.warn(
+                f"Could not fetch latest release from Github: HTTP {res.status}"
+            )
+            window.latest_release_version = None
+            return None
+    except Exception as err:
+        console.warn("Could not fetch latest release version from Github: " + str(err))
+        window.latest_release_version = None
+        return None
+
+
 # %% Authentication
 
 
@@ -207,6 +236,12 @@ async def renew_webtoken(verbose=True, reset=False):
 # Renew token now, and set up to renew each hour
 window.addEventListener("load", lambda: renew_webtoken())
 register_long_timer_in_secs("renew_webtoken", 3600, lambda: renew_webtoken(False))
+
+# Fetch latest release, and set up to renew each hour
+window.addEventListener("load", lambda: fetch_latest_github_release())
+register_long_timer_in_secs(
+    "fetch_latest_github_release", 3600, lambda: fetch_latest_github_release()
+)
 
 
 # %% Storage

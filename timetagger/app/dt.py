@@ -5,7 +5,6 @@ PScript implementation of datetime utilities.
 from pscript import this_is_js, RawJS
 from pscript.stubs import Date, isNaN, Math, window
 
-
 DAYS_SHORT = [
     "Sun",
     "Mon",
@@ -294,15 +293,15 @@ def duration_string_colon(t, show_secs=False):
     sign = "-" if t < 0 else ""
     t = abs(t)
     if show_secs:
-        part1 = f"{sign}{t//3600:.0f}:{(t//60)%60:02.0f}"
-        part2 = f":{t%60:02.0f}"
+        part1 = f"{sign}{t // 3600:.0f}:{(t // 60) % 60:02.0f}"
+        part2 = f":{t % 60:02.0f}"
         return (part1, part2) if show_secs == 2 else (part1 + part2)
     else:
         m = Math.round(t / 60)
         # Note how for anythinh below 30s is shown as 00:00. This is
         # intentional because a single 00:00:28 would stand out quite
         # oddly in a series of hh:mm entries.
-        return f"{sign}{m//60:.0f}:{m%60:02.0f}"
+        return f"{sign}{m // 60:.0f}:{m % 60:02.0f}"
 
 
 def duration_string(t, show_secs=False, repr=None):
@@ -330,7 +329,7 @@ def duration_string(t, show_secs=False, repr=None):
             else:
                 part1 = f"{sign}{m:.0f}m"
             # Combine with seconds
-            part2 = f"{t%60:02.0f}s"
+            part2 = f"{t % 60:02.0f}s"
             return (part1, part2) if show_secs == 2 else (part1 + part2)
         else:
             # Prep the numbers
@@ -341,11 +340,11 @@ def duration_string(t, show_secs=False, repr=None):
                 d = h // 24
                 h -= d * 24
             if d:
-                return f"{sign}{d:.0f}d{h:02.0f}h{m%60:02.0f}m"
+                return f"{sign}{d:.0f}d{h:02.0f}h{m % 60:02.0f}m"
             elif h:
-                return f"{sign}{h:.0f}h{m%60:02.0f}m"
+                return f"{sign}{h:.0f}h{m % 60:02.0f}m"
             elif t >= 60:
-                return f"{sign}{m%60:.0f}m"
+                return f"{sign}{m % 60:.0f}m"
             else:
                 # Only show the secs (even if show_secs is False)
                 return f"{sign}{t:.0f}s"
@@ -401,8 +400,7 @@ def get_weeknumber(t):
     # From https://weeknumber.net/how-to/javascript
     date = Date(t * 1000)  # noqa
     day_offfset = 7 - get_first_day_of_week()  # noqa
-    RawJS(
-        """
+    RawJS("""
     date.setHours(0, 0, 0, 0);
     // Thursday in current week decides the year.
     date.setDate(date.getDate() + 3 - (date.getDay() + day_offfset) % 7);
@@ -411,8 +409,7 @@ def get_weeknumber(t):
     // Adjust to Thursday in week 1 and count number of weeks from date to week1.
     var res = 1 + Math.round(((date.getTime() - week1.getTime()) / 86400000
                                - 3 + (week1.getDay() + 6) % 7) / 7);
-    """
-    )
+    """)
     return res  # noqa
 
 
