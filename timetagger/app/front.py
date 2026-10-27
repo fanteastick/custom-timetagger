@@ -87,14 +87,14 @@ def set_colors():
     COLORS.acc_clr = "#DEAA22"
     COLORS.notification = "#ff4444"
 
-    # Grays chosen to work in both light and dark mode
-    COLORS.tick_text = "#292929"
+    # Grays chosen to work in both light and dark mode (tick_text is set below)
     COLORS.tick_stripe1 = COLORS.prim1_clr  # "rgba(130, 130, 130, 0.6)"  # day
     COLORS.tick_stripe2 = "rgba(130, 130, 130, 0.4)"  # major
     COLORS.tick_stripe3 = "rgba(130, 130, 130, 0.08)"  # minor
 
     if light_mode:
         COLORS.background1 = "rgba(244, 244, 244, 1)"  # == #f4f4f4  - must end in "1)"
+        COLORS.tick_text = "#292929"  # darker than upstream, for better contrast
         COLORS.top_bg = COLORS.prim1_clr
 
         COLORS.panel_bg = COLORS.sec1_clr
@@ -118,6 +118,7 @@ def set_colors():
     else:
         # App background (use rgba so the color can be re-used with different alpha)
         COLORS.background1 = "rgba(23, 30, 40, 1)"  # must end in "1)"
+        COLORS.tick_text = "rgba(130, 130, 130, 1)"  # #292929 is unreadable here
         COLORS.top_bg = COLORS.prim1_clr
 
         COLORS.panel_bg = COLORS.prim1_clr
@@ -1359,19 +1360,6 @@ class TopWidget(Widget):
                 {"ref": "topright", "font": FONT.condensed},
             )
             x -= dx
-            x -= 3
-            dx = self._draw_button(
-                ctx,
-                x,
-                y,
-                None,
-                h,
-                ["fas-\uf0fe", "Bulk"],
-                "record_bulk",
-                "Add multiple records",
-                {"ref": "topright", "font": FONT.condensed},
-            )
-            x -= dx
         else:
             # This but takes more space, but there it no stop but. So no reason
             # to reduce size when avail_width is low.
@@ -1384,19 +1372,6 @@ class TopWidget(Widget):
                 ["fas-\uf04b", "Record"],
                 "record_start",
                 start_tt,
-                {"ref": "topright", "font": FONT.condensed},
-            )
-            x -= dx
-            x -= 3
-            dx = self._draw_button(
-                ctx,
-                x,
-                y,
-                None,
-                h,
-                ["fas-\uf0fe", "Bulk"],
-                "record_bulk",
-                "Add multiple records",
                 {"ref": "topright", "font": FONT.condensed},
             )
             x -= dx
@@ -1413,6 +1388,23 @@ class TopWidget(Widget):
                 text = "Press to start tracking time!"
                 options = {"ref": "topleft", "color": "#000", "body": COLORS.acc_clr}
                 self._draw_button(ctx, x, y + 70, None, 30, text, "", "", options)
+
+        # Bulk-entry button (custom feature). Drawn after the record button
+        # (and its hint balloon for new users), so the balloon points at the
+        # record button.
+        x -= 3
+        dx = self._draw_button(
+            ctx,
+            x,
+            y,
+            None,
+            h,
+            ["fas-\uf0fe", "Bulk"],
+            "record_bulk",
+            "Add multiple records",
+            {"ref": "topright", "font": FONT.condensed},
+        )
+        x -= dx
 
         # Pomodoro button
         if window.simplesettings.get("pomodoro_enabled"):
