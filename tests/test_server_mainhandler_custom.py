@@ -7,6 +7,8 @@ import sys
 from asgineer.testutils import MockTestServer
 from _common import run_tests
 
+from timetagger._config import set_config
+
 
 async def mock_app_asset_handler(request, path):
     return 200, {}, "app:" + path
@@ -22,6 +24,7 @@ async def mock_api_handler(request, path):
 
 def get_main_handler():
     """Get the real main_handler, with mocked asset and API handlers."""
+    set_config([], {})  # Use the default config, other tests may change it
     sys.modules.pop("timetagger.__main__", None)
     import timetagger.__main__ as main_module
 
