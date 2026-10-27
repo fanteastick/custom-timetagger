@@ -41,7 +41,6 @@ from timetagger.server import (
     enable_service_worker,
 )
 
-
 # Special hooks exit early
 if __name__ == "__main__" and len(sys.argv) >= 2:
     if sys.argv[1] in ("--version", "version"):
@@ -73,39 +72,43 @@ app_asset_handler = asgineer.utils.make_asset_handler(app_assets, max_age=0)
 web_asset_handler = asgineer.utils.make_asset_handler(web_assets, max_age=0)
 
 
-# The app is served both at the domain root and under this prefix. Serving
-# under the prefix keeps existing links, bookmarks and installed PWAs working.
-PATH_PREFIX = "/timetagger"
-
-
 @asgineer.to_asgi
 async def main_handler(request):
     """
     The main handler where we delegate to the API or asset handler.
 
-    The app is served both at the root (e.g. ``/app/``) and under the
-    ``/timetagger/`` prefix (e.g. ``/timetagger/app/``), so it can be hosted
-    at the root of a (sub)domain without needing redirects, while the
-    upstream URLs keep working.
+    We serve at config.path_prefix (default /timetagger/) for a few reasons,
+    one being that the service worker won't interfere with other stuff you
+    might serve on localhost. This fork also serves the app at the domain root.
     """
 
-    path = request.path
+    prefix = config.path_prefix  # normalized, e.g. "/timetagger/" or "/"
+    p = request.path
 
-    # Strip the optional prefix, so both URL styles are routed the same.
-    if path == PATH_PREFIX:
-        return 307, {"Location": PATH_PREFIX + "/"}, b""  # Redirect
-    elif path.startswith(PATH_PREFIX + "/"):
-        path = path[len(PATH_PREFIX) :]
+    # Optionally redirect the root directly to the app
+    if p == "/" and config.app_redirect:
+        return 307, {"Location": f"{prefix}app/"}, b""
 
-    if path == "/status":
+    # Custom: serve both under the prefix and at the domain root. Requests
+    # under the prefix are normalized by stripping it.
+    if prefix != "/":
+        if p == prefix.rstrip("/"):
+            return 307, {"Location": prefix}, b""
+        elif p.startswith(prefix):
+            p = p[len(prefix) - 1 :]  # keep the leading slash
+
+    if p == "/status":
         return 200, {}, "ok"
-    elif path.startswith("/api/v2/"):
-        return await api_handler(request, path[len("/api/v2/") :].strip("/"))
-    elif path.startswith("/app/"):
-        return await app_asset_handler(request, path[len("/app/") :].strip("/"))
+    elif p.startswith("/api/v2/"):
+        path = p.removeprefix("/api/v2/").strip("/")
+        return await api_handler(request, path)
+    elif p.startswith("/app/"):
+        path = p.removeprefix("/app/").strip("/")
+        return await app_asset_handler(request, path)
     else:
-        # Includes the landing page at "/". Unknown paths result in a 404.
-        return await web_asset_handler(request, path.strip("/"))
+        # The landing page at "/", other pages, or a 404 for unknown paths
+        path = p.strip("/")
+        return await web_asset_handler(request, path)
 
 
 async def api_handler(request, path):

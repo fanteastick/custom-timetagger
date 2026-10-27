@@ -5,7 +5,6 @@ Front end implementation in PScript.
 from pscript import this_is_js
 from pscript.stubs import window, Math, time, perf_counter
 
-
 if this_is_js():
     dt = window.dt
     utils = window.utils
@@ -86,6 +85,7 @@ def set_colors():
     COLORS.sec1_clr = "#E6E7E5"
     COLORS.sec2_clr = "#F4F4F4"
     COLORS.acc_clr = "#DEAA22"
+    COLORS.notification = "#ff4444"
 
     # Grays chosen to work in both light and dark mode (tick_text is set below)
     COLORS.tick_stripe1 = COLORS.prim1_clr  # "rgba(130, 130, 130, 0.6)"  # day
@@ -788,7 +788,19 @@ class Widget:
     def on_draw(self, ctx):
         pass
 
-    def _draw_button(self, ctx, x, y, given_w, h, text, action, tt, options):
+    def _draw_button(
+        self,
+        ctx,
+        x,
+        y,
+        given_w,
+        h,
+        text,
+        action,
+        tt,
+        options,
+        show_notification_dot=False,
+    ):
         PSCRIPT_OVERLOAD = False  # noqa
 
         # Set and collect options
@@ -908,6 +920,18 @@ class Widget:
             else:
                 ctx.fillText(text, x, 0.5 * (y1 + y2))
             x += width + opt.space
+
+        # Draw notification dot if requested
+        if show_notification_dot:
+            dot_radius = 4
+            dot_x = x2 - dot_radius + 6
+            dot_y = y1 + dot_radius + 8
+
+            # Draw red circle
+            ctx.fillStyle = COLORS.notification
+            ctx.beginPath()
+            ctx.arc(dot_x, dot_y, dot_radius, 0, 2 * PI)
+            ctx.fill()
 
         return w
 
@@ -1156,8 +1180,26 @@ class TopWidget(Widget):
             "ref": "centermiddle",
             "color": COLORS.sec2_clr,
         }
+
+        show_notification_dot = False
+        if (
+            window.latest_release_version
+            and window.timetaggerversion
+            and window.latest_release_version != window.timetaggerversion
+        ):  # new release available
+            show_notification_dot = True
+
         dx = self._draw_button(
-            ctx, x, y + yoffset, None, 48, "fas-\uf0c9", "menu", "", opt
+            ctx,
+            x,
+            y + yoffset,
+            None,
+            48,
+            "fas-\uf0c9",
+            "menu",
+            "",
+            opt,
+            show_notification_dot,
         )
 
         # Draw title
@@ -1528,6 +1570,11 @@ class TopWidget(Widget):
             self._handle_button_press("guide")
         else:
             return
+
+        # Avoid double handling by canvas and window both
+        if e.currentTarget is self._canvas.node:
+            e.stopPropagation()
+
         e.preventDefault()
 
     def _handle_button_press(self, action):
@@ -1548,7 +1595,7 @@ class TopWidget(Widget):
                 self._canvas.notification_dialog.open(last_error, "Sync error")
             else:
                 msg = "This button shows the sync status. The current status is <b>OK</b>!"
-                msg += "<br><br>The app and server continiously exchange updates. "
+                msg += "<br><br>The app and server continuously exchange updates. "
                 msg += "When something is wrong, this button will change, "
                 msg += "and you can then click it to get more info."
                 self._canvas.notification_dialog.open(msg, "Sync status")
