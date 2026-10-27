@@ -2,6 +2,8 @@
 Implementation of HTML-based dialogs.
 """
 
+# flake8: noqa: F824
+
 from pscript import this_is_js
 from pscript.stubs import (
     window,
@@ -14,7 +16,6 @@ from pscript.stubs import (
     Notification,
     isNaN,
 )
-
 
 if this_is_js():
     tools = window.tools
@@ -163,8 +164,7 @@ def csvsplit(s, sep, i=0):
     # so we should be fine with our own data.
     global RawJS
     parts = []
-    RawJS(
-        """
+    RawJS("""
     var mode = 0; // 0: between fields, 1: unescaped, 2: escaped
     var sepcode = sep.charCodeAt(0);
     var lastsplit = i;
@@ -213,8 +213,7 @@ def csvsplit(s, sep, i=0):
             parts[j] = val.slice(1, val.length-1).replace('""', '"');
         }
     }
-    """
-    )
+    """)
     return parts, i
 
 
@@ -426,28 +425,56 @@ class MenuDialog(BaseDialog):
                 text = "Not signed in"
         loggedinas.innerText = text
 
-        whatsnew = "What's new"
-        whatsnew_url = "https://github.com/almarklein/timetagger/releases"
-        if window.timetaggerversion:
-            whatsnew += " in version " + window.timetaggerversion.lstrip("v")
+        # Determine version and update notice
+        whatsnew_notify = False
+        if not window.timetaggerversion:
+            whatsnew = "What's new"
+            whatsnew_url = "https://github.com/almarklein/timetagger/releases"
+        elif (
+            window.timetaggerversion == window.latest_release_version
+            or not window.latest_release_version
+        ):
+            whatsnew = "What's new in version " + window.timetaggerversion.lstrip("v")
+            whatsnew_url = f"https://github.com/almarklein/timetagger/releases/tag/{window.timetaggerversion}"
+        else:
+            whatsnew = (
+                "New version available: "
+                + window.timetaggerversion.lstrip("v")
+                + "&nbsp;<i class='fas' style='font-size: 0.8em;'>\uf061</i>&nbsp;"
+                + window.latest_release_version.lstrip("v")
+            )
+            whatsnew_url = f"https://github.com/almarklein/timetagger/releases/tag/{window.latest_release_version}"
+            whatsnew_notify = True
 
         container = self.maindiv
-        for icon, show, title, func in [
-            (None, True, "External pages", None),
-            ("\uf015", True, "Homepage", "/"),
-            ("\uf059", True, "Get tips and help", "https://timetagger.app/support"),
-            ("\uf0a1", True, whatsnew, whatsnew_url),
-            (None, store_valid, "Manage", None),
-            ("\uf002", store_valid, "Search", self._search),
-            ("\uf56f", store_valid, "Import records", self._import),
-            ("\uf56e", store_valid, "Export all records", self._export),
-            (None, True, "User", None),
-            ("\uf013", store_valid, "Settings", self._show_settings),
-            ("\uf2bd", True, "Account", "../account"),
-            ("\uf2f6", not logged_in, "Login", "../login"),
-            ("\uf2f5", logged_in, "Logout", "../logout"),
-            (None, is_installable, None, None),
-            ("\uf3fa", is_installable, "<b>Install this app</b>", self._do_install),
+        for icon, show, notify, title, func in [
+            (None, True, False, "External pages", None),
+            ("\uf015", True, False, "Homepage", "/"),
+            (
+                "\uf059",
+                True,
+                False,
+                "Get tips and help",
+                "https://timetagger.app/support",
+            ),
+            ("\uf0a1", True, whatsnew_notify, whatsnew, whatsnew_url),
+            (None, store_valid, False, "Manage", None),
+            ("\uf002", store_valid, False, "Search", self._search),
+            ("\uf56f", store_valid, False, "Import records", self._import),
+            ("\uf56e", store_valid, False, "Export all records", self._export),
+            (None, True, False, "User", None),
+            ("\uf013", store_valid, False, "Settings", self._show_settings),
+            ("\uf2bd", True, False, "Account", "../account"),
+            ("\uf2f6", not logged_in, False, "Login", "../login"),
+            ("\uf2f5", logged_in, False, "Logout", "../logout"),
+            (None, is_installable, False, None, None),
+            (
+                "\uf3fa",
+                is_installable,
+                False,
+                "<b>Install this app</b>",
+                self._do_install,
+            ),
         ]:
             if not show:
                 continue
@@ -462,7 +489,13 @@ class MenuDialog(BaseDialog):
                 el = document.createElement("a")
                 html = ""
                 if icon:
-                    html += f"<i class='fas'>{icon}</i>&nbsp;&nbsp;"
+                    if notify:
+                        html += "<span class='icon-wrapper'>"
+                        html += f"<i class='fas'>{icon}</i>"
+                        html += "<span class='notification-dot'></span>"
+                        html += "</span>&nbsp;&nbsp;"
+                    else:
+                        html += f"<i class='fas'>{icon}</i>&nbsp;&nbsp;"
                 html += title
                 el.innerHTML = html
                 if isinstance(func, str):
@@ -866,9 +899,28 @@ class StartStopEdit:
         else:
             # Switch between "already running" and "finished".
             # Since this is an existing record, we should maintain initial values.
-            if self.radio_startrlr.checked:
+            if (
+                self.radio_startrlr.checked
+            ):  # If the "Started earlier" radio button is checked
                 self.reset(self.initial_t1, self.initial_t1)
-            else:
+            elif (
+                self.radio_finished.checked
+            ):  # If the "Already done" radio button is checked
+                range_t1, range_t2 = window.canvas.range.get_range()
+                now = dt.now()
+                if not (range_t1 <= now <= range_t2):
+                    # If the current time is not in the currently viewed range assume
+                    #   the user is filling a historical event in the viewed range.
+                    #   We will pick the hour in the center of the range as the default filled time.
+                    center_time = (range_t1 + range_t2) // 2
+                    t1 = center_time - 1800
+                    t2 = center_time + 1800
+                    self.reset(t1, t2)
+                else:
+                    # If the current time IS in the currently viewed range,
+                    #   set the start time to one hour ago and the stop time to now.
+                    self.reset(now - 3600, now)
+            else:  # This should never trigger since currently the only options are "start now", "started earlier", and "already done"
                 t2 = max(self.initial_t1 + 1, dt.now())
                 self.reset(self.initial_t1, t2)
 
@@ -888,7 +940,7 @@ class StartStopEdit:
 
         # Store original str duration
         t = t2 - t1
-        self.ori_duration = f"{t//3600:.0f}h {(t//60)%60:02.0f}m {t%60:02.0f}s"
+        self.ori_duration = f"{t // 3600:.0f}h {(t // 60) % 60:02.0f}m {t % 60:02.0f}s"
 
         self._set_time_input_visibility()
         self.render()
@@ -926,12 +978,12 @@ class StartStopEdit:
         if is_running:
             t = dt.now() - self.t1
             self.durationinput.value = (
-                f"{t//3600:.0f}h {(t//60)%60:02.0f}m {t%60:02.0f}s"
+                f"{t // 3600:.0f}h {(t // 60) % 60:02.0f}m {t % 60:02.0f}s"
             )
         else:
             t = self.t2 - self.t1
             m = Math.round(t / 60)
-            self.durationinput.value = f"{m//60:.0f}h {m%60:02.0f}m"
+            self.durationinput.value = f"{m // 60:.0f}h {m % 60:02.0f}m"
 
     def _days_between_dates(self, d1, d2):
         year1, month1, day1 = d1.split("-")
@@ -999,7 +1051,7 @@ class StartStopEdit:
             self.date2input.value = t2_date
             self.time2input.value = t2_time[:5]
             m = Math.round(t / 60)
-            self.durationinput.value = f"{m//60:.0f}h {m%60:02.0f}m"
+            self.durationinput.value = f"{m // 60:.0f}h {m % 60:02.0f}m"
 
         # Tweak bgcolor of date2 field to hide it a bit
         if self.days2 == 0:
@@ -1149,7 +1201,8 @@ class StartStopEdit:
 
         # Invoke callback and rerender
         if call_callback:
-            window.setTimeout(self.callback, 1)
+            self.callback()  # direct callback to avoid race condition #583
+            # window.setTimeout(self.callback, 1000)
 
         if action.endswith("fast"):
             self._update_duration(True)
@@ -1500,13 +1553,16 @@ class Autocompleter:
             item = document.createElement("div")
             item.classList.add("tag-suggestion")
             item.innerHTML = html
+
             def _make_click_handler(index, completer):
                 def _handler(e):
                     completer._finish_cb(e, index)
                     if e and e.stopPropagation:
                         e.stopPropagation()
                         e.preventDefault()
+
                 return _handler
+
             item.onmousedown = _make_click_handler(i, self)
             self._div.appendChild(item)
         # Show
@@ -1653,7 +1709,7 @@ class Autocompleter:
         tag_list = []
         for tag, tag_t2 in tags_dict.items():
             tag_list.push((tag, tag_t2))
-        tag_list.sort(key=lambda x: x[0])
+        tag_list.sort(key=lambda x: -x[1])
         return tag_list
 
 
@@ -1806,7 +1862,9 @@ class BulkRecordDialog(BaseDialog):
                 return
             start_t = self._parse_time(start_value)
             if start_t is None:
-                window.alert("Consecutive mode requires valid Start date-times in every row.")
+                window.alert(
+                    "Consecutive mode requires valid Start date-times in every row."
+                )
                 return
             starts.append(start_t)
         # Set each End (except last) to the next row's Start
@@ -1838,7 +1896,9 @@ class BulkRecordDialog(BaseDialog):
             item = document.createElement("div")
             item.classList.add("tag-suggestion")
             item.innerHTML = ds
-            item.onmousedown = lambda e=None, val=ds, input=ds_in, div=suggestion_div: self._select_activity_suggestion(val, input, div, e)
+            item.onmousedown = lambda e=None, val=ds, input=ds_in, div=suggestion_div: self._select_activity_suggestion(
+                val, input, div, e
+            )
             suggestion_div.appendChild(item)
         suggestion_div.hidden = False
 
@@ -2044,10 +2104,22 @@ class RecordDialog(BaseDialog):
                 el.innerText = x
                 self.maindiv.appendChild(el)
 
+        # Keep track of composing state (e.g. entering JCK characters) to avoid prematurely submitting on enter (#594)
+        self._is_composing = False
+        self._ds_input.addEventListener(
+            "compositionstart", lambda: self._set_compose_state(True)
+        )
+        self._ds_input.addEventListener(
+            "compositionend", lambda: self._set_compose_state(False)
+        )
+
         # Almost done. Focus on ds if this looks like desktop; it's anoying on mobile
         super().open(callback)
         if utils.looks_like_desktop():
             self._ds_input.focus()
+
+    def _set_compose_state(self, value):
+        self._is_composing = value
 
     def _autocomp_finished(self):
         self._show_tags_from_ds()
@@ -2106,7 +2178,7 @@ class RecordDialog(BaseDialog):
             self._ds_input.value = self._ds_input.value.slice(0, stores.STR_MAX)
             if "max" not in self._ds_header.innerHTML:
                 self._ds_header.innerHTML += (
-                    f" <small>(max {stores.STR_MAX-1} chars)</small>"
+                    f" <small>(max {stores.STR_MAX - 1} chars)</small>"
                 )
             self._ds_input.style.setProperty("outline", "dashed 2px red")
             reset = lambda: self._ds_input.style.setProperty("outline", "")
@@ -2208,7 +2280,9 @@ class RecordDialog(BaseDialog):
 
     def _on_key(self, e):
         key = e.key.lower()
-        if self._autocompleter.on_key(e):
+        if self._is_composing:
+            pass
+        elif self._autocompleter.on_key(e):
             e.stopPropagation()
             return
         elif key == "enter" or key == "return":
@@ -2420,7 +2494,7 @@ class TagComboDialog(BaseDialog):
     def _make_click_handler(self, tag, callback):
         def handler():
             self.close()
-            self._canvas.tag_dialog.open(tag, callback),
+            self._canvas.tag_dialog.open(tag, callback)
 
         return handler
 
@@ -2686,7 +2760,7 @@ class TagPresetsDialog(BaseDialog):
         if length >= stores.JSON_MAX:
             self._input_element.style.setProperty("outline", "dashed 2px red")
             self._analysis_out.innerHTML = (
-                f"Sorry, used {length} of max {stores.JSON_MAX-1} chars."
+                f"Sorry, used {length} of max {stores.JSON_MAX - 1} chars."
             )
             return
 
@@ -2763,9 +2837,21 @@ class TagRenameDialog(BaseDialog):
 
         self._records = []
 
+        # Keep track of composing state (e.g. entering JCK characters)
+        self._is_composing = False
+        self._tagname2.addEventListener(
+            "compositionstart", lambda: self._set_compose_state(True)
+        )
+        self._tagname2.addEventListener(
+            "compositionend", lambda: self._set_compose_state(False)
+        )
+
         super().open(callback)
         if utils.looks_like_desktop():
             self._tagname2.focus()
+
+    def _set_compose_state(self, value):
+        self._is_composing = value
 
     def close(self):
         self._records = []
@@ -2785,7 +2871,9 @@ class TagRenameDialog(BaseDialog):
 
     def _on_key2(self, e):
         key = e.key.lower()
-        if key == "enter" or key == "return":
+        if self._is_composing:
+            pass
+        elif key == "enter" or key == "return":
             e.stopPropagation()
             e.preventDefault()
             self._on_name2_done()
@@ -2936,6 +3024,18 @@ class SearchDialog(BaseDialog):
         if utils.looks_like_desktop():
             self._search_input.focus()
 
+        # Keep track of composing state (e.g. entering JCK characters)
+        self._is_composing = False
+        self._search_input.addEventListener(
+            "compositionstart", lambda: self._set_compose_state(True)
+        )
+        self._search_input.addEventListener(
+            "compositionend", lambda: self._set_compose_state(False)
+        )
+
+    def _set_compose_state(self, value):
+        self._is_composing = value
+
     def close(self):
         self._autocompleter.close()
         self._records = []
@@ -3009,7 +3109,9 @@ class SearchDialog(BaseDialog):
 
     def _on_key(self, e):
         key = e.key.lower()
-        if self._autocompleter.on_key(e):
+        if self._is_composing:
+            pass
+        elif self._autocompleter.on_key(e):
             e.stopPropagation()
             return
         elif key == "enter" or key == "return":
@@ -3113,8 +3215,7 @@ class SearchDialog(BaseDialog):
             record = window.store.records.get_by_key(key)
             ds = record.ds or ""
             date = dt.time2str(record.t1).split("T")[0]
-            lines.append(
-                f"""
+            lines.append(f"""
                 <a href='#date={date}'
                     style='cursor: pointer;'>
                     <span>{date}</span>
@@ -3124,8 +3225,7 @@ class SearchDialog(BaseDialog):
                     <i class='fas'>\uf682</i>
                     <span>{ds}</span>
                 </a>
-                """
-            )
+                """)
         self._records_node.innerHTML = "<br />\n".join(lines)
 
     def _open_record(self, key):
@@ -3240,19 +3340,19 @@ class ReportDialog(BaseDialog):
         date_button.onclick = self._user_chose_date
         #
         grouping = window.simplesettings.get("report_grouping")
-        
+
         self._grouping_select.value = grouping
         groupperiod = window.simplesettings.get("report_groupperiod")
         self._groupperiod_select.value = groupperiod
         hidesecondary = window.simplesettings.get("report_hidesecondary")
         self._hidesecondary_but.checked = hidesecondary
         format = window.simplesettings.get("report_format")
-        
+
         self._format_but.value = format
         showrecords = window.simplesettings.get("report_showrecords")
         self._showrecords_but.checked = showrecords
         #
-        
+
         self._grouping_select.onchange = self._on_setting_changed
         self._groupperiod_select.onchange = self._on_setting_changed
         self._hidesecondary_but.oninput = self._on_setting_changed
@@ -3313,19 +3413,19 @@ class ReportDialog(BaseDialog):
         format = self._format_but.value
         if format == "h0":
             round_duration = lambda t: Math.round(t / 3600) * 3600
-            duration2str = lambda t: f"{t/3600:0.0f}"
+            duration2str = lambda t: f"{t / 3600:0.0f}"
         elif format == "h1":
             round_duration = lambda t: Math.round(t / 360) * 360
-            duration2str = lambda t: f"{t/3600:0.1f}"
+            duration2str = lambda t: f"{t / 3600:0.1f}"
         elif format == "h2":
             round_duration = lambda t: Math.round(t / 36) * 36
-            duration2str = lambda t: f"{t/3600:0.2f}"
+            duration2str = lambda t: f"{t / 3600:0.2f}"
         elif format == "h3":
             round_duration = lambda t: Math.round(t / 3.6) * 3.6
-            duration2str = lambda t: f"{t/3600:0.3f}"
+            duration2str = lambda t: f"{t / 3600:0.3f}"
         elif format == "h4":
             round_duration = lambda t: Math.round(t / 0.36) * 0.36
-            duration2str = lambda t: f"{t/3600:0.4f}"
+            duration2str = lambda t: f"{t / 3600:0.4f}"
         elif format == "hms":
             round_duration = lambda t: Math.round(t)
             duration2str = lambda t: dt.duration_string_colon(t, True)
@@ -3423,6 +3523,7 @@ class ReportDialog(BaseDialog):
                 tagz1 = window.store.records.tags_from_record(record).join(" ")
                 if tagz1 not in name_map:
                     continue
+                group.duration += record.duration
                 group.records.push(record)
 
         # Perform grouping for time ...
@@ -4134,7 +4235,7 @@ class ExportDialog(BaseDialog):
 
     def _on_dtformat(self, e):
         self._dtformat = e.target.value
-        
+
         self.fill_records()
 
     async def fill_records(self):
