@@ -654,6 +654,7 @@ class StartStopEdit:
         self.callback = callback
         self.initialmode = mode.lower()
         self.initial_t1, self.initial_t2 = t1, t2  # even more original than ori_t1 :)
+        self.record_key = None  # Set by the RecordDialog, used for snapping
 
         if self.initialmode in ("start", "new"):
             text_startnow = "Start now"
@@ -680,7 +681,9 @@ class StartStopEdit:
                 <button type='button' style='width:2em; margin-left:-1px;'>-</button>
                 <button type='button' style='width:2em; margin-left:-1px;'>+</button>
                 </span>
-            <span></span>
+            <span>
+                <button type='button' style='font-size:75%; margin-left:6px;'>Snap to previous end time</button>
+            </span>
         <span><i class='fas' style='color:#999; vertical-align:middle;'>\uf28d</i></span>
             <input type='date' step='1' style='font-size: 16px;' />
             <span style='display: flex;'>
@@ -688,7 +691,9 @@ class StartStopEdit:
                 <button type='button' style='width:2em; margin-left:-1px;'>-</button>
                 <button type='button' style='width:2em; margin-left:-1px;'>+</button>
                 </span>
-            <span></span>
+            <span>
+                <button type='button' style='font-size:75%; margin-left:6px;'>Snap to next start time</button>
+            </span>
         <span><i class='fas' style='color:#999; vertical-align:middle;'>\uf2f2</i></span>
             <span>Total time</span>
             <input type='text' style='flex: 1; min-width: 50px; font-size: 16px' />
@@ -711,81 +716,38 @@ class StartStopEdit:
             _,  # date and time 1
             self.date1input,
             self.time1stuff,
-            _,
+            self.snap1node,
             _,  # date and time 2
             self.date2input,
             self.time2stuff,
-            _,
+            self.snap2node,
             _,  # duration
             _,
             self.durationinput,
-            _,
+            self.quickdurationnode,
         ) = self.gridnode.children
 
-        # Children order for the time fields is: input, -, +  (we map
-        # variables so names match semantics: time1more is the plus button)
+        # The order is input, -, + (the minus button is on the left)
         self.time1input, self.time1less, self.time1more = self.time1stuff.children
         self.time2input, self.time2less, self.time2more = self.time2stuff.children
+        self.snap1but = self.snap1node.children[0]
+        self.snap2but = self.snap2node.children[0]
+        quick_buts = [
+            self.quickdurationnode.children[i]
+            for i in range(len(self.quickdurationnode.children))
+        ]
 
         # Tweaks
-        for but in (self.time1less, self.time1more, self.time2less, self.time2more):
+        for but in [
+            self.time1less,
+            self.time1more,
+            self.time2less,
+            self.time2more,
+            self.snap1but,
+            self.snap2but,
+        ] + quick_buts:
             but.setAttribute("tabIndex", -1)
 
-        # Add snap buttons into the empty spans to the right of the time fields.
-        # These spans already exist in the grid (positions 3 and 7) so inserting
-        # elements here won't change the gridnode.children indexing.
-        try:
-            self._snap_prev_span = self.gridnode.children[3]
-            self._snap_next_span = self.gridnode.children[7]
-
-            # Previous-end snap (to the right of start time)
-            btn_prev = document.createElement("button")
-            btn_prev.setAttribute("type", "button")
-            btn_prev.innerText = "Snap to previous end time"
-            btn_prev.style.fontSize = "75%"
-            btn_prev.style.marginLeft = "6px"
-            btn_prev.onclick = lambda e: self._snap_to_prev_end()
-            self._snap_prev_span.appendChild(btn_prev)
-
-            # Next-start snap (to the right of end time)
-            btn_next = document.createElement("button")
-            btn_next.setAttribute("type", "button")
-            btn_next.innerText = "Snap to next start time"
-            btn_next.style.fontSize = "75%"
-            btn_next.style.marginLeft = "6px"
-            btn_next.onclick = lambda e: self._snap_to_next_start()
-            self._snap_next_span.appendChild(btn_next)
-        except Exception:
-            # Being defensive: if the DOM shape changed, don't crash.
-            pass
-
-        # Wire up quick-set buttons for duration (15m / 30m)
-        try:
-            # Find all buttons under the grid node and attach handlers
-            btns = self.gridnode.getElementsByTagName("button")
-            for i in range(len(btns)):
-                try:
-                    b = btns[i]
-                    dq = b.getAttribute("data-quick")
-                    if dq:
-                        mins = int(dq)
-
-                        def _make_cb(m):
-                            def _cb(e):
-                                # Use hours when it's a whole hour, otherwise minutes
-                                if m % 60 == 0:
-                                    self.durationinput.value = f"{m//60}h"
-                                else:
-                                    self.durationinput.value = f"{m}m"
-                                self.onchanged("duration")
-
-                            return _cb
-
-                        b.onclick = _make_cb(mins)
-                except Exception:
-                    continue
-        except Exception:
-            pass
         # Styling
         self.gridnode.style.display = "grid"
         self.gridnode.style.gridTemplateColumns = "auto 140px 140px 2fr"
@@ -823,6 +785,11 @@ class StartStopEdit:
         self.time2less.onclick = lambda: self.onchanged("time2less")
         self.time1input.oninput = lambda: self.onchanged("time1fast")
         self.time2input.oninput = lambda: self.onchanged("time2fast")
+        self.snap1but.onclick = self._snap_to_prev_end
+        self.snap2but.onclick = self._snap_to_next_start
+        for but in quick_buts:
+            minutes = int(but.getAttribute("data-quick"))
+            but.onclick = self._make_quick_duration_handler(minutes)
 
         self.reset(t1, t2, True)
         self._timer_handle = window.setInterval(lambda: self._update_duration(), 200)
@@ -909,13 +876,9 @@ class StartStopEdit:
             show_subnode(i, not self.radio_startnow.checked)
         for i in range(4, 8):
             show_subnode(i, self.radio_finished.checked)
-        # For the duration row (indices 8-11) keep most controls visible
-        # when not in 'start now'. However, the quick-duration buttons
-        # (the last subnode, index 11) should only appear when the record
-        # is finished/stopped (i.e. the "Already done" / "Stopped" page).
         for i in range(8, 11):
             show_subnode(i, not self.radio_startnow.checked)
-        # Quick-duration buttons (15m/30m/1h) only on finished/stopped.
+        # The quick-duration buttons only make sense for finished records
         show_subnode(11, self.radio_finished.checked)
 
     def _update_duration(self, force=False):
@@ -1156,67 +1119,69 @@ class StartStopEdit:
         else:
             return self.render()
 
+    def _make_quick_duration_handler(self, minutes):
+        # A factory, so that each button gets its own value for minutes
+        return lambda: self._set_quick_duration(minutes)
+
+    def _set_quick_duration(self, minutes):
+        """Set the duration to the given number of minutes, keeping the start."""
+        # Go through onchanged() so the usual checks and callbacks apply
+        self.durationinput.value = f"{minutes}m"
+        self.onchanged("duration")
+
     def _snap_to_prev_end(self):
-        """Snap start time to the previous record's end time if one exists."""
-        # Determine current start time from inputs (use current values, do nothing if time not set)
-        if self.date1input.value:
-            year1, month1, day1 = self.date1input.value.split("-")
-        else:
-            year1, month1, day1 = self.ori_date1.split("-")
-        year1, month1, day1 = int(year1), int(month1), int(day1)
-
-        hh, mm, ss = self._get_time("time1", False)
-        if hh is None:
-            return  # no valid time typed
-
-        d1 = window.Date(year1, month1 - 1, day1, hh, mm, ss)
-        t1_current = dt.to_time_int(d1)
-
-        # Query records before t1_current and find the record with largest t2 <= t1_current
-        records = window.store.records.get_records(0, t1_current).values()
-        best = None
-        for r in records:
-            if r.t1 < r.t2 and r.t2 <= t1_current:
-                if best is None or r.t2 > best.t2:
-                    best = r
-        if not best:
-            return
-
-        date_str, time_str = dt.time2localstr(best.t2).split(" ")
-        self.date1input.value = date_str
-        self.time1input.value = time_str[:5]
-        # Trigger the same handling as manual fast time change
-        self.onchanged("time1fast")
+        """Snap the start time to the end of the closest preceding record."""
+        t = self._find_adjacent_record_time(self.t1, -1)
+        if t is not None:
+            self._set_datetime_input("1", t)
 
     def _snap_to_next_start(self):
-        """Snap end time to the next record's start time if one exists."""
-        if self.date2input.value:
-            year2, month2, day2 = self.date2input.value.split("-")
-        else:
-            year2, month2, day2 = self.ori_date2.split("-")
-        year2, month2, day2 = int(year2), int(month2), int(day2)
+        """Snap the end time to the start of the closest following record."""
+        if self.ori_t1 == self.ori_t2:
+            return  # running, there is no end time to snap
+        t = self._find_adjacent_record_time(self.t2, +1)
+        if t is not None:
+            self._set_datetime_input("2", t)
 
-        hh, mm, ss = self._get_time("time2", False)
-        if hh is None:
-            return
+    def _find_adjacent_record_time(self, t, direction):
+        """Find the end time of the latest record that ends at or before t
+        (direction -1), or the start time of the earliest record that starts
+        at or after t (direction +1). Running records and the record being
+        edited are ignored. Returns None if there is no such record.
+        """
+        # Search an increasingly larger window, to avoid copying all records
+        # in the store, while still finding a record that's long ago.
+        span = 86400
+        max_span = 100 * 365 * 86400
+        while True:
+            if direction < 0:
+                records = window.store.records.get_records(t - span, t)
+            else:
+                records = window.store.records.get_records(t, t + span)
+            best = None
+            for record in records.values():
+                if record.t1 == record.t2 or record.key == self.record_key:
+                    continue
+                if direction < 0:
+                    if record.t2 <= t and (best is None or record.t2 > best):
+                        best = record.t2
+                else:
+                    if record.t1 >= t and (best is None or record.t1 < best):
+                        best = record.t1
+            if best is not None or span >= max_span:
+                return best
+            span *= 8
 
-        d2 = window.Date(year2, month2 - 1, day2, hh, mm, ss)
-        t2_current = dt.to_time_int(d2)
-
-        # Query records after t2_current and find the record with smallest t1 >= t2_current
-        records = window.store.records.get_records(t2_current, 1e15).values()
-        best = None
-        for r in records:
-            if r.t1 < r.t2 and r.t1 >= t2_current:
-                if best is None or r.t1 < best.t1:
-                    best = r
-        if not best:
-            return
-
-        date_str, time_str = dt.time2localstr(best.t1).split(" ")
-        self.date2input.value = date_str
-        self.time2input.value = time_str[:5]
-        self.onchanged("time2fast")
+    def _set_datetime_input(self, which, t):
+        """Set the date and time inputs for t1 or t2 (which is "1" or "2"),
+        and apply the change in the same way as when the user edits the time.
+        """
+        date_str, time_str = dt.time2localstr(t).split(" ")
+        self["date" + which + "input"].value = date_str
+        # Include the seconds so we snap exactly (the input shows hh:mm again
+        # after the re-render)
+        self["time" + which + "input"].value = time_str
+        self.onchanged("time" + which)
 
 
 completer_all_tags = None
@@ -1243,8 +1208,6 @@ class Autocompleter:
 
         # Current suggestion
         self._suggested_tags_in_autocomp = []
-
-        window._autocomp_finish = self._finish_cb
 
     def close(self):
         self._div = None
@@ -1500,14 +1463,7 @@ class Autocompleter:
             item = document.createElement("div")
             item.classList.add("tag-suggestion")
             item.innerHTML = html
-            def _make_click_handler(index, completer):
-                def _handler(e):
-                    completer._finish_cb(e, index)
-                    if e and e.stopPropagation:
-                        e.stopPropagation()
-                        e.preventDefault()
-                return _handler
-            item.onmousedown = _make_click_handler(i, self)
+            item.onmousedown = self._make_finish_handler(i)
             self._div.appendChild(item)
         # Show
         self._div.hidden = False
@@ -1531,6 +1487,11 @@ class Autocompleter:
         active_child.classList.add("active")
         # Make corresponding item visible
         active_child.scrollIntoView({"block": "nearest"})
+
+    def _make_finish_handler(self, i):
+        # Bind the handler to this instance (rather than using a global
+        # function), so that multiple autocompleters can coexist.
+        return lambda e: self._finish_cb(e, i)
 
     def _finish_cb(self, e, i):
         # Called when the autocomp item is clicked
@@ -1658,7 +1619,9 @@ class Autocompleter:
 
 
 class BulkRecordDialog(BaseDialog):
-    """Dialog for adding up to five timed activities in one go."""
+    """Dialog for adding several finished records in one go."""
+
+    ROW_COUNT = 5
 
     def open(self, callback=None):
         self.maindiv.innerHTML = f"""
@@ -1671,245 +1634,257 @@ class BulkRecordDialog(BaseDialog):
                 <span>Activity</span>
             </div>
             <div></div>
-            <div style='display:flex;justify-content:flex-end; margin: 0.5em 0 0.75em 0;'>
-                <button type='button' class='actionbutton' id='bulk-snap-today'><i class='fas'>\uf2f1</i>&nbsp;&nbsp;Snap all to today</button>
-                <button type='button' class='actionbutton' id='bulk-consecutive-mode'><i class='fas'>\uf0c1</i>&nbsp;&nbsp;Consecutive mode</button>
+            <div style='display:flex; justify-content:flex-end; margin: 0.5em 0 0.75em 0;'>
+                <button type='button' class='actionbutton'><i class='fas'>\uf2f1</i>&nbsp;&nbsp;Snap all to today</button>
+                <button type='button' class='actionbutton'><i class='fas'>\uf0c1</i>&nbsp;&nbsp;Consecutive mode</button>
             </div>
-            <div style='margin-top:2em;'></div>
-            <div style='display:flex;justify-content:flex-end;'>
+            <div style='color:#955; min-height:1em;'></div>
+            <div style='margin-top:1em;'></div>
+            <div style='display:flex; justify-content:flex-end;'>
                 <button type='button' class='actionbutton'><i class='fas'>\uf00d</i>&nbsp;&nbsp;Cancel</button>
                 <button type='button' class='actionbutton submit'><i class='fas'>\uf24d</i>&nbsp;&nbsp;Save</button>
             </div>
         """
 
+        close_but = self.maindiv.children[0].children[-1]
         self._rows_div = self.maindiv.children[2]
-        self._snap_today_but = self.maindiv.children[3].children[0]
-        self._consecutive_but = self.maindiv.children[3].children[1]
-        self._cancel_but = self.maindiv.children[-1].children[0]
-        self._submit_but = self.maindiv.children[-1].children[1]
+        snap_today_but, consecutive_but = self.maindiv.children[3].children
+        self._message_node = self.maindiv.children[4]
+        cancel_but, submit_but = self.maindiv.children[-1].children
+
+        # Collect recent descriptions once, rather than on each key press
+        self._recent_activities = self._get_recent_activities()
+
         self._rows = []
+        for i in range(self.ROW_COUNT):
+            self._rows.append(self._create_row())
 
-        for i in range(5):
-            row = document.createElement("div")
-            row.classList.add("container")
-            row.style.display = "grid"
-            row.style.gridTemplateColumns = "1fr 1fr 2fr"
-            row.style.gap = "8px"
-            row.style.marginBottom = "6px"
-            row.style.position = "relative"
-
-            start_in = document.createElement("input")
-            start_in.type = "datetime-local"
-            start_in.style.width = "100%"
-            start_in.setAttribute("placeholder", "Start")
-
-            stop_in = document.createElement("input")
-            stop_in.type = "datetime-local"
-            stop_in.style.width = "100%"
-            stop_in.setAttribute("placeholder", "Stop")
-
-            activity_wrap = document.createElement("div")
-            activity_wrap.style.position = "relative"
-            ds_in = document.createElement("input")
-            ds_in.type = "text"
-            ds_in.style.width = "100%"
-            ds_in.setAttribute("placeholder", "Activity")
-            ds_in.setAttribute("spellcheck", "true")
-
-            suggestion_div = document.createElement("div")
-            suggestion_div.classList.add("tag-suggestions-autocomp")
-            suggestion_div.hidden = True
-            suggestion_div.style.position = "absolute"
-            suggestion_div.style.left = "3px"
-            suggestion_div.style.right = "3px"
-            suggestion_div.style.top = "100%"
-            suggestion_div.style.zIndex = "20"
-
-            activity_wrap.appendChild(ds_in)
-            activity_wrap.appendChild(suggestion_div)
-
-            def _bind_activity_handlers(ds_in, suggestion_div):
-                def _on_activity_focus(e=None):
-                    self._update_recent_activity_suggestions(ds_in, suggestion_div)
-
-                def _on_activity_input(e=None):
-                    self._update_recent_activity_suggestions(ds_in, suggestion_div)
-
-                def _on_activity_key(e):
-                    self._handle_activity_key(ds_in, suggestion_div, e)
-
-                ds_in.onfocus = _on_activity_focus
-                ds_in.oninput = _on_activity_input
-                ds_in.onkeydown = _on_activity_key
-
-            _bind_activity_handlers(ds_in, suggestion_div)
-
-            row.appendChild(start_in)
-            row.appendChild(stop_in)
-            row.appendChild(activity_wrap)
-            self._rows_div.appendChild(row)
-            self._rows.append((start_in, stop_in, ds_in, suggestion_div))
-
-        self._cancel_but.onclick = self.close
-        self._submit_but.onclick = self.submit_soon
-        self._snap_today_but.onclick = self._snap_all_to_today
-        self._consecutive_but.onclick = self._apply_consecutive_mode
-        self.maindiv.addEventListener("click", self._clear_autocompletion)
+        close_but.onclick = self.close
+        cancel_but.onclick = self.close
+        submit_but.onclick = self.submit_soon
+        snap_today_but.onclick = self._snap_all_to_today
+        consecutive_but.onclick = self._apply_consecutive_mode
 
         super().open(callback)
         if utils.looks_like_desktop():
-            self._rows[0][0].focus()
+            self._rows[0].start.focus()
 
-    def _set_value_date_to_today(self, input_el):
-        cur = to_str(input_el.value or "").strip()
-        if not cur:
-            d = window.Date()
-            year = d.getFullYear()
-            month = str(d.getMonth() + 1)
-            if len(month) == 1:
-                month = "0" + month
-            day = str(d.getDate())
-            if len(day) == 1:
-                day = "0" + day
-            input_el.value = f"{year}-{month}-{day}T00:00"
-            return
+    def _create_row(self):
+        node = document.createElement("div")
+        node.style.display = "grid"
+        node.style.gridTemplateColumns = "1fr 1fr 2fr"
+        node.style.gap = "8px"
+        node.style.marginBottom = "6px"
+        node.innerHTML = """
+            <input type='datetime-local' style='width:100%;' />
+            <input type='datetime-local' style='width:100%;' />
+            <div style='position:relative;'>
+                <input type='text' placeholder='Activity' spellcheck='true' style='width:100%;' />
+                <div class='tag-suggestions-autocomp' hidden></div>
+            </div>
+        """
+        self._rows_div.appendChild(node)
 
-        if "T" in cur:
-            date_part, time_part = cur.split("T", 1)
+        start_input, stop_input, ds_wrapper = node.children
+        ds_input, suggestions_div = ds_wrapper.children
+        row = {
+            "node": node,
+            "start": start_input,
+            "stop": stop_input,
+            "ds": ds_input,
+            "suggestions": suggestions_div,
+            "matches": [],
+            "index": 0,
+        }
+        ds_input.onfocus = lambda: self._update_suggestions(row)
+        ds_input.oninput = lambda: self._update_suggestions(row)
+        ds_input.onblur = lambda: self._hide_suggestions(row)
+        return row
+
+    def _on_key(self, e):
+        if e.isComposing:
+            return  # e.g. entering CJK characters
+        key = e.key.lower()
+        for row in self._rows:
+            if e.target is row.ds and self._on_suggestions_key(row, key):
+                e.preventDefault()
+                e.stopPropagation()
+                return
+        if key == "enter" or key == "return":
+            self.submit_soon()
         else:
-            date_part, time_part = cur, "00:00"
+            super()._on_key(e)
 
-        d = window.Date()
-        year = d.getFullYear()
-        month = str(d.getMonth() + 1)
-        if len(month) == 1:
-            month = "0" + month
-        day = str(d.getDate())
-        if len(day) == 1:
-            day = "0" + day
+    # %% Activity suggestions
 
-        input_el.value = f"{year}-{month}-{day}T{time_part}"
-
-    def _snap_all_to_today(self):
-        for start_in, stop_in, ds_in, suggestion_div in self._rows:
-            self._set_value_date_to_today(start_in)
-            self._set_value_date_to_today(stop_in)
-
-    def _apply_consecutive_mode(self):
-        # Ensure every row has a valid Start value
-        starts = []
-        for i in range(len(self._rows)):
-            start_in, stop_in, ds_in, suggestion_div = self._rows[i]
-            start_value = to_str(start_in.value or "").strip()
-            if not start_value:
-                window.alert("Consecutive mode requires a Start value in every row.")
-                return
-            start_t = self._parse_time(start_value)
-            if start_t is None:
-                window.alert("Consecutive mode requires valid Start date-times in every row.")
-                return
-            starts.append(start_t)
-        # Set each End (except last) to the next row's Start
-        for i in range(len(self._rows) - 1):
-            _, stop_in, _, _ = self._rows[i]
-            next_start_t = starts[i + 1]
-            stop_in.value = dt.time2localstr(next_start_t).replace(" ", "T")[:16]
-
-    def _get_recent_activities(self, needle=""):
-        needle = to_str(needle or "").strip().lower()
-        ds_list = []
+    def _get_recent_activities(self):
+        """Get the descriptions of recent records, most recent first."""
         t2 = dt.now()
-        t1 = t2 - 12 * 7 * 24 * 3600
-        for record in window.store.records.get_records(t1, t2).values():
-            ds = to_str(record.ds or "").strip()
-            if ds and ds not in ds_list:
-                if not needle or needle in ds.lower():
-                    ds_list.append(ds)
-        return ds_list
+        t1 = t2 - 12 * 7 * 86400  # 12 weeks
+        records = window.store.records.get_records(t1, t2).values()
+        records.sort(key=lambda r: -r.t2)
+        activities = []
+        for record in records:
+            ds = to_str(record.get("ds", "")).strip()
+            if ds and ds not in activities:
+                activities.append(ds)
+        return activities
 
-    def _update_recent_activity_suggestions(self, ds_in, suggestion_div):
-        needle = to_str(ds_in.value or "").strip()
-        suggestions = self._get_recent_activities(needle)
-        suggestion_div.innerHTML = ""
-        if not needle or len(suggestions) == 0:
-            suggestion_div.hidden = True
+    def _update_suggestions(self, row):
+        needle = to_str(row.ds.value).strip().lower()
+        row.matches = []
+        if needle:
+            for ds in self._recent_activities:
+                if needle in ds.lower():
+                    row.matches.append(ds)
+        row.suggestions.innerHTML = ""
+        if len(row.matches) == 0:
+            row.suggestions.hidden = True
             return
-        for ds in suggestions:
+        for i in range(len(row.matches)):
             item = document.createElement("div")
             item.classList.add("tag-suggestion")
-            item.innerHTML = ds
-            item.onmousedown = lambda e=None, val=ds, input=ds_in, div=suggestion_div: self._select_activity_suggestion(val, input, div, e)
-            suggestion_div.appendChild(item)
-        suggestion_div.hidden = False
+            item.innerText = row.matches[i]  # not innerHTML; ds is user text
+            item.onmousedown = self._make_suggestion_handler(row, i)
+            row.suggestions.appendChild(item)
+        row.suggestions.hidden = False
+        self._set_active_suggestion(row, 0)
 
-    def _handle_activity_key(self, ds_in, suggestion_div, e):
-        if e and e.key.lower() == "escape":
-            suggestion_div.hidden = True
-            return
-        if e and (e.key.lower() == "arrowdown" or e.key.lower() == "arrowup"):
-            items = suggestion_div.getElementsByClassName("tag-suggestion")
-            if len(items) > 0:
-                e.preventDefault()
-                suggestion_div.focus()
+    def _make_suggestion_handler(self, row, i):
+        # A factory, so each item gets its own index
+        def handler(e):
+            e.preventDefault()  # keep focus in the input
+            self._select_suggestion(row, i)
+
+        return handler
+
+    def _set_active_suggestion(self, row, index):
+        n = len(row.matches)
+        row.index = ((index % n) + n) % n  # wrap around
+        items = row.suggestions.children
+        for i in range(len(items)):
+            items[i].classList.remove("active")
+        items[row.index].classList.add("active")
+        items[row.index].scrollIntoView({"block": "nearest"})
+
+    def _select_suggestion(self, row, index):
+        row.ds.value = row.matches[index]
+        self._hide_suggestions(row)
+
+    def _hide_suggestions(self, row):
+        row.matches = []
+        row.suggestions.hidden = True
+        row.suggestions.innerHTML = ""
+
+    def _on_suggestions_key(self, row, key):
+        """Handle a key for the suggestions of a row. Returns True if handled."""
+        if row.suggestions.hidden or len(row.matches) == 0:
+            return False
+        if key == "arrowdown":
+            self._set_active_suggestion(row, row.index + 1)
+        elif key == "arrowup":
+            self._set_active_suggestion(row, row.index - 1)
+        elif key == "enter" or key == "return" or key == "tab":
+            self._select_suggestion(row, row.index)
+        elif key == "escape":
+            self._hide_suggestions(row)
+        else:
+            return False
+        return True
+
+    # %% Helpers to fill in times
+
+    def _snap_all_to_today(self):
+        """Set the date of all start and stop fields to today, keeping the
+        times. Empty fields are set to today at 00:00.
+        """
+        today = dt.time2localstr(dt.now()).split(" ")[0]
+        for row in self._rows:
+            for input in [row.start, row.stop]:
+                value = to_str(input.value).strip()
+                time_part = value.split("T")[1] if "T" in value else "00:00"
+                input.value = today + "T" + time_part
+
+    def _apply_consecutive_mode(self):
+        """Set the stop time of each row to the start time of the next row.
+        Rows without a start time or activity are skipped.
+        """
+        rows = []
+        for i in range(len(self._rows)):
+            row = self._rows[i]
+            start_value = to_str(row.start.value).strip()
+            if not start_value or not to_str(row.ds.value).strip():
+                continue
+            if self._parse_time(start_value) is None:
+                self._message_node.innerText = f"Row {i + 1} has an invalid start time."
                 return
-
-    def _select_activity_suggestion(self, value, ds_in, suggestion_div, e=None):
-        ds_in.value = value
-        suggestion_div.hidden = True
-        suggestion_div.innerHTML = ""
-        if e and e.stopPropagation:
-            e.stopPropagation()
-            e.preventDefault()
-
-    def _clear_autocompletion(self, e=None):
-        for start_in, stop_in, ds_in, suggestion_div in self._rows:
-            suggestion_div.hidden = True
-            suggestion_div.innerHTML = ""
+            rows.append(row)
+        if len(rows) < 2:
+            self._message_node.innerText = (
+                "Consecutive mode needs at least two rows with a start and an activity."
+            )
+            return
+        self._message_node.innerText = ""
+        for i in range(len(rows) - 1):
+            rows[i].stop.value = rows[i + 1].start.value
 
     def _parse_time(self, value):
-        value = to_str(value or "").strip()
+        """Parse the value of a datetime-local input to a time int, or None."""
+        value = to_str(value).strip()
         if not value:
             return None
-        try:
-            value = value.replace(" ", "T")
-            if value.count(":") == 1:
-                value += ":00"
-            return dt.to_time_int(value)
-        except Exception:
+        if value.count(":") == 1:
+            value += ":00"
+        t = dt.to_time_int(value)
+        if isNaN(t):
             return None
+        return t
+
+    # %% Submit
 
     def submit(self):
         records = []
-        for start_in, stop_in, ds_in, suggestion_div in self._rows:
-            start_value = to_str(start_in.value or "").strip()
-            stop_value = to_str(stop_in.value or "").strip()
-            ds_value = to_str(ds_in.value or "").strip()
+        errors = []
+        for i in range(len(self._rows)):
+            row = self._rows[i]
+            row.node.style.outline = ""
+            start_value = to_str(row.start.value).strip()
+            stop_value = to_str(row.stop.value).strip()
+            ds_value = to_str(row.ds.value).strip()
 
-            if not start_value and not stop_value and not ds_value:
+            # Rows without an activity are skipped (as before), this includes
+            # empty rows and rows that only got prefilled by "snap to today".
+            if not ds_value:
                 continue
 
-            start_t = self._parse_time(start_value)
-            stop_t = self._parse_time(stop_value)
-            if start_t is None or stop_t is None:
+            t1 = self._parse_time(start_value)
+            t2 = self._parse_time(stop_value)
+            if t1 is None or t2 is None:
+                errors.append(f"row {i + 1} needs a valid start and stop")
+                row.node.style.outline = "dashed 2px red"
+                continue
+            if t1 > t2:
+                t1, t2 = t2, t1
+            if t1 == t2:
+                # t1 == t2 would mean a running record
+                errors.append(f"row {i + 1} has the same start and stop")
+                row.node.style.outline = "dashed 2px red"
                 continue
 
-            if start_t > stop_t:
-                start_t, stop_t = stop_t, start_t
-
-            record = window.store.records.create(start_t, stop_t)
+            record = window.store.records.create(t1, t2)
             _, parts = utils.get_tags_and_parts_from_string(ds_value)
             record.ds = parts.join("")
-            if not record.ds:
-                record.pop("ds", None)
             records.append(record)
 
-        if len(records) == 0:
-            self.close()
+        # Don't save anything if a row is invalid, so the user can fix it
+        if len(errors) > 0:
+            self._message_node.innerText = "Not saved: " + errors.join(", ") + "."
             return
+        if len(records) == 0:
+            return self.close()
 
         for record in records:
             window.store.records.put(record)
-
         super().submit(records)
 
 
@@ -2007,6 +1982,7 @@ class RecordDialog(BaseDialog):
         self._time_edit = StartStopEdit(
             self._time_node, self._on_times_change, record.t1, record.t2, mode
         )
+        self._time_edit.record_key = record.key
 
         # Prepare autocompletion
         self._autocompleter = Autocompleter(
@@ -3240,19 +3216,16 @@ class ReportDialog(BaseDialog):
         date_button.onclick = self._user_chose_date
         #
         grouping = window.simplesettings.get("report_grouping")
-        
         self._grouping_select.value = grouping
         groupperiod = window.simplesettings.get("report_groupperiod")
         self._groupperiod_select.value = groupperiod
         hidesecondary = window.simplesettings.get("report_hidesecondary")
         self._hidesecondary_but.checked = hidesecondary
         format = window.simplesettings.get("report_format")
-        
         self._format_but.value = format
         showrecords = window.simplesettings.get("report_showrecords")
         self._showrecords_but.checked = showrecords
         #
-        
         self._grouping_select.onchange = self._on_setting_changed
         self._groupperiod_select.onchange = self._on_setting_changed
         self._hidesecondary_but.oninput = self._on_setting_changed
@@ -3874,532 +3847,6 @@ class ExportDialog(BaseDialog):
 
     def _reset_copy_but_text(self):
         self._copy_but.innerHTML = "Copy export-table <i class='fas'>\uf0ea</i>"
-
-    def _get_export_filename(self, ext):
-        date1 = self._t1_date.replace("-", "")
-        date2 = self._t2_date.replace("-", "")
-        if date1 == date2:
-            return f"timetagger-{date1}.{ext}"
-        else:
-            return f"timetagger-{date1}-{date2}.{ext}"
-
-    def _save_as_csv(self):
-        # This is all pretty straightforward. The most tricky bit it
-        # the ds (description). It can have any Unicode, so it should
-        # surrounded by double quotes. Any double-quotes inside the ds
-        # must be escaped by doubling them. And finally, don't put space
-        # after comma's, or tools like Excel may not be able to parse
-        # the quoted string correctly. Note that in _generate_table_rows
-        # the ds is stipped from \t\r\n.
-
-        rows = self._generate_table_rows(self._last_t1, self._last_t2)
-
-        lines = []
-        lines.append(
-            "subtotals,tag_groups,duration,date,start,stop,description,user,tags"
-        )
-        lines.append("")
-
-        user = ""  # noqa
-        if window.store.get_auth:
-            auth = window.store.get_auth()
-            if auth:
-                user = auth.username  # noqa
-
-        for row in rows:
-            if row[0] == "blank":
-                lines.append(",,,,,,,,")
-            elif row[0] == "head":
-                lines.append(RawJS('row[1] + "," + row[2] + ",,,,,,,"'))
-            elif row[0] == "record":
-                _, key, duration, sd1, st1, st2, ds, tagz = row
-                ds = '"' + ds.replace('"', '""') + '"'
-                lines.append(
-                    RawJS(
-                        """',,' + duration + ',' + sd1 + ',' + st1 + ',' + st2 + ',' + ds + ',' + user + ',' + tagz"""
-                    )
-                )
-
-        # Get blob wrapped in an object url
-        obj_url = window.URL.createObjectURL(
-            window.Blob(["\r\n".join(lines)], {"type": "text/csv"})
-        )
-        # Create a element to attach the download to
-        a = document.createElement("a")
-        a.style.display = "none"
-        a.setAttribute("download", self._get_export_filename("csv"))
-        a.href = obj_url
-        document.body.appendChild(a)
-        # Trigger the download by simulating click
-        a.click()
-        # Cleanup
-        window.URL.revokeObjectURL(a.href)
-        document.body.removeChild(a)
-
-    def _save_as_pdf(self):
-        # Configure
-        width, height = 210, 297  # A4
-        margin = 20  # mm
-        showrecords = self._showrecords_but.checked
-        rowheight = 6
-        rowheight2 = rowheight / 2
-        rowskip = 3
-        coloffsets = 15, 4, 17, 10, 10
-
-        # Get row data and divide in chunks. This is done so that we
-        # can break pages earlier to avoid breaking chunks.
-        rows = self._generate_table_rows(self._last_t1, self._last_t2)
-        chunks = [[]]
-        for row in rows:
-            if row[0] == "blank":
-                chunks.append([])
-            else:
-                chunks[-1].append(row)
-
-        # Initialize the document
-        doc = window.jsPDF()
-        doc.setFont("Ubuntu-C")
-
-        # Draw preamble
-        doc.setFontSize(24)
-        doc.text("Time record report", margin, margin, {"baseline": "top"})
-        img = document.getElementById("ttlogo_bd")
-        doc.addImage(img, "PNG", width - margin - 30, margin, 30, 30)
-        # doc.setFontSize(12)
-        # doc.text(
-        #     "TimeTagger",
-        #     width - margin,
-        #     margin + 22,
-        #     {"align": "right", "baseline": "top"},
-        # )
-
-        tagname = self._tags.join(" ") if self._tags else "all"
-        d1 = dt.format_isodate(self._t1_date)
-        d2 = dt.format_isodate(self._t2_date)
-        doc.setFontSize(11)
-        doc.text("Tags:  ", margin + 20, margin + 15, {"align": "right"})
-        doc.text(tagname, margin + 20, margin + 15)
-        doc.text("From:  ", margin + 20, margin + 20, {"align": "right"})
-        doc.text(d1, margin + 20, margin + 20)
-        doc.text("Until:  ", margin + 20, margin + 25, {"align": "right"})
-        doc.text(d2, margin + 20, margin + 25)
-
-        # Prepare drawing table
-        doc.setFontSize(10)
-        left_middle = {"align": "left", "baseline": "middle"}
-        right_middle = {"align": "right", "baseline": "middle"}
-        y = margin + 35
-
-        # Draw table
-        npages = 1
-        for chunknr in range(len(chunks)):
-            # Maybe insert a page break early to preserve whole chunks
-            space_used = y - margin
-            space_total = height - 2 * margin
-            if space_used > 0.9 * space_total:
-                rowsleft = sum([len(chunk) for chunk in chunks[chunknr:]])
-                space_needed = rowsleft * rowheight
-                space_needed += (len(chunks) - chunknr) * rowskip
-                if space_needed > space_total - space_used:
-                    doc.addPage()
-                    npages += 1
-                    y = margin
-
-            for rownr, row in enumerate(chunks[chunknr]):
-                # Add page break?
-                if (y + rowheight) > (height - margin):
-                    doc.addPage()
-                    npages += 1
-                    y = margin
-
-                if row[0] == "head":
-                    if showrecords:
-                        doc.setFillColor("#ccc")
-                    else:
-                        doc.setFillColor("#f3f3f3" if rownr % 2 else "#eaeaea")
-                    doc.rect(margin, y, width - 2 * margin, rowheight, "F")
-                    # Duration
-                    doc.setTextColor("#000")
-                    x = margin + coloffsets[0]
-                    doc.text(row[1], x, y + rowheight2, right_middle)  # duration
-                    # Tag names, add structure via color, no padding
-                    basename, lastname = "", row[2]
-                    doc.setTextColor("#555")
-                    x += coloffsets[1]
-                    doc.text(basename, x, y + rowheight2, left_middle)
-                    doc.setTextColor("#000")
-                    x += doc.getTextWidth(basename)
-                    doc.text(lastname, x, y + rowheight2, left_middle)
-
-                elif row[0] == "record":
-                    doc.setFillColor("#f3f3f3" if rownr % 2 else "#eaeaea")
-                    doc.rect(margin, y, width - 2 * margin, rowheight, "F")
-                    doc.setTextColor("#000")
-                    # _, key, duration, sd1, st1, st2, ds, tagz = row
-                    # The duration is right-aligned
-                    x = margin + coloffsets[0]
-                    doc.text(row[2], x, y + rowheight2, right_middle)
-                    # The rest (sd1, st1, st2) is left-aligned
-                    for i in (1, 2, 3):
-                        x += coloffsets[i]
-                        s = row[i + 2]
-                        if i == 3:  # st2
-                            doc.text("-", x - 1, y + rowheight2, right_middle)
-                        doc.text(s, x, y + rowheight2, left_middle)
-                    # The description may be so long we need to split it
-                    x += coloffsets[4]
-                    min_x = x
-                    max_x = width - margin
-                    ds = row[6]
-                    if x + doc.getTextWidth(ds) <= max_x:
-                        doc.text(ds, x, y + rowheight2, left_middle)
-                    else:
-                        w_space = doc.getTextWidth(" ")
-                        for word in ds.split(" "):
-                            w = doc.getTextWidth(word)
-                            if x + w > max_x:  # need new line
-                                x = min_x
-                                y += rowheight
-                                doc.setFillColor("#f3f3f3" if rownr % 2 else "#eaeaea")
-                                doc.rect(margin, y, width - 2 * margin, rowheight, "F")
-                                doc.setTextColor("#000")
-                            doc.text(word, x, y + rowheight2, left_middle)
-                            x += w + w_space
-                else:
-                    doc.setFillColor("#ffeeee")
-                    doc.rect(margin, y, width - 2 * margin, rowheight, "F")
-
-                y += rowheight
-            y += rowskip
-
-        # Add pagination
-        doc.setFontSize(8)
-        doc.setTextColor("#555")
-        for i in range(npages):
-            pagenr = i + 1
-            doc.setPage(pagenr)
-            x, y = width - 0.5 * margin, 0.5 * margin
-            doc.text(f"{pagenr}/{npages}", x, y, {"align": "right", "baseline": "top"})
-
-        doc.save(self._get_export_filename("pdf"))
-        # doc.output('dataurlnewwindow')  # handy during dev
-
-
-class ExportDialog(BaseDialog):
-    """Dialog to export data."""
-
-    def __init__(self, canvas):
-        super().__init__(canvas)
-        self._dtformat = "local"
-        self._working = 0
-
-    def open(self, callback=None):
-        self.maindiv.innerHTML = f"""
-            <h1><i class='fas'>\uf56e</i>&nbsp;&nbsp;Export
-                <button type='button'><i class='fas'>\uf00d</i></button>
-            </h1>
-            <p>
-            The table below contains all your records. This can be
-            useful for backups, processing, or to move your data
-            elsewhere.
-            </p><p>&nbsp;</p>
-            <div>
-                <span>Date-time format:</span>
-                &nbsp;<input type="radio" name="dtformat" value="local" checked> Local</input>
-                &nbsp;<input type="radio" name="dtformat" value="unix"> Unix</input>
-                &nbsp;<input type="radio" name="dtformat" value="iso"> ISO 8601</input>
-            </div>
-            <button type='button'>Copy</button>
-            <hr />
-            <table id='export_table'></table>
-            """
-
-        self._table_element = self.maindiv.children[-1]
-        self._table_element.classList.add("darkheaders")
-
-        self._copy_but = self.maindiv.children[-3]
-        self._copy_but.onclick = self._copy_clipboard
-        self._copy_but.disabled = True
-
-        radio_buttons = self.maindiv.children[-4].children
-        for i in range(1, len(radio_buttons)):
-            but = radio_buttons[i]
-            but.onchange = self._on_dtformat
-
-        self._cancel_but = self.maindiv.children[0].children[-1]
-        self._cancel_but.onclick = self.close
-        super().open(callback)
-
-        self.fill_records()
-
-    def _on_dtformat(self, e):
-        self._dtformat = e.target.value
-        
-        self.fill_records()
-
-    async def fill_records(self):
-        self._working += 1
-        working = self._working
-        await window.tools.sleepms(100)
-
-        # Prepare
-        self._copy_but.disabled = True
-        itemsdict = window.store.records._items
-        lines = []
-
-        # Add header
-        lineparts = ["key", "start", "stop", "tags", "description"]
-        lines.append("<tr><th>" + lineparts.join("</th><th>") + "</th></tr>")
-
-        # Parse all items
-        # Take care that description does not have newlines or tabs, using to_str
-        # With tab-separated values it is not common to surround values in quotes.
-        for key in itemsdict.keys():
-            item = itemsdict[key]
-            if not window.stores.is_hidden(item):
-                t1, t2 = item.t1, item.t2
-                if self._dtformat == "local":
-                    t1, t2 = dt.time2localstr(t1), dt.time2localstr(t2)
-                elif self._dtformat == "iso":
-                    t1, t2 = dt.time2str(t1, 0), dt.time2str(t2, 0)
-                lineparts = [
-                    item.key,
-                    t1,
-                    t2,
-                    utils.get_tags_and_parts_from_string(item.ds)[0].join(" "),
-                    to_str(item.get("ds", "")),
-                ]
-                lines.append("<tr><td>" + lineparts.join("</td><td>") + "</td></tr>")
-            # Give feedback while processing
-            if len(lines) % 256 == 0:
-                self._copy_but.innerHTML = "Found " + len(lines) + " records"
-                # self._table_element.innerHTML = lines.join("\n")
-                await window.tools.sleepms(1)
-            if working != self._working:
-                return
-
-        # Done
-        self._copy_but.innerHTML = "Copy export-table <i class='fas'>\uf0ea</i>"
-        self._table_element.innerHTML = lines.join("\n")
-        self._copy_but.disabled = False
-
-    def _copy_clipboard(self):
-        table = self.maindiv.children[-1]
-        tools.copy_dom_node(table)
-        self._copy_but.innerHTML = "Copy export-table <i class='fas'>\uf46c</i>"
-        window.setTimeout(self._reset_copy_but_text, 800)
-
-    def _reset_copy_but_text(self):
-        self._copy_but.innerHTML = "Copy export-table <i class='fas'>\uf0ea</i>"
-
-    def _get_export_filename(self, ext):
-        date1 = self._t1_date.replace("-", "")
-        date2 = self._t2_date.replace("-", "")
-        if date1 == date2:
-            return f"timetagger-{date1}.{ext}"
-        else:
-            return f"timetagger-{date1}-{date2}.{ext}"
-
-    def _save_as_csv(self):
-        # This is all pretty straightforward. The most tricky bit it
-        # the ds (description). It can have any Unicode, so it should
-        # surrounded by double quotes. Any double-quotes inside the ds
-        # must be escaped by doubling them. And finally, don't put space
-        # after comma's, or tools like Excel may not be able to parse
-        # the quoted string correctly. Note that in _generate_table_rows
-        # the ds is stipped from \t\r\n.
-
-        rows = self._generate_table_rows(self._last_t1, self._last_t2)
-
-        lines = []
-        lines.append(
-            "subtotals,tag_groups,duration,date,start,stop,description,user,tags"
-        )
-        lines.append("")
-
-        user = ""  # noqa
-        if window.store.get_auth:
-            auth = window.store.get_auth()
-            if auth:
-                user = auth.username  # noqa
-
-        for row in rows:
-            if row[0] == "blank":
-                lines.append(",,,,,,,,")
-            elif row[0] == "head":
-                lines.append(RawJS('row[1] + "," + row[2] + ",,,,,,,"'))
-            elif row[0] == "record":
-                _, key, duration, sd1, st1, st2, ds, tagz = row
-                ds = '"' + ds.replace('"', '""') + '"'
-                lines.append(
-                    RawJS(
-                        """',,' + duration + ',' + sd1 + ',' + st1 + ',' + st2 + ',' + ds + ',' + user + ',' + tagz"""
-                    )
-                )
-
-        # Get blob wrapped in an object url
-        obj_url = window.URL.createObjectURL(
-            window.Blob(["\r\n".join(lines)], {"type": "text/csv"})
-        )
-        # Create a element to attach the download to
-        a = document.createElement("a")
-        a.style.display = "none"
-        a.setAttribute("download", self._get_export_filename("csv"))
-        a.href = obj_url
-        document.body.appendChild(a)
-        # Trigger the download by simulating click
-        a.click()
-        # Cleanup
-        window.URL.revokeObjectURL(a.href)
-        document.body.removeChild(a)
-
-    def _save_as_pdf(self):
-        # Configure
-        width, height = 210, 297  # A4
-        margin = 20  # mm
-        showrecords = self._showrecords_but.checked
-        rowheight = 6
-        rowheight2 = rowheight / 2
-        rowskip = 3
-        coloffsets = 15, 4, 17, 10, 10
-
-        # Get row data and divide in chunks. This is done so that we
-        # can break pages earlier to avoid breaking chunks.
-        rows = self._generate_table_rows(self._last_t1, self._last_t2)
-        chunks = [[]]
-        for row in rows:
-            if row[0] == "blank":
-                chunks.append([])
-            else:
-                chunks[-1].append(row)
-
-        # Initialize the document
-        doc = window.jsPDF()
-        doc.setFont("Ubuntu-C")
-
-        # Draw preamble
-        doc.setFontSize(24)
-        doc.text("Time record report", margin, margin, {"baseline": "top"})
-        img = document.getElementById("ttlogo_bd")
-        doc.addImage(img, "PNG", width - margin - 30, margin, 30, 30)
-        # doc.setFontSize(12)
-        # doc.text(
-        #     "TimeTagger",
-        #     width - margin,
-        #     margin + 22,
-        #     {"align": "right", "baseline": "top"},
-        # )
-
-        tagname = self._tags.join(" ") if self._tags else "all"
-        d1 = dt.format_isodate(self._t1_date)
-        d2 = dt.format_isodate(self._t2_date)
-        doc.setFontSize(11)
-        doc.text("Tags:  ", margin + 20, margin + 15, {"align": "right"})
-        doc.text(tagname, margin + 20, margin + 15)
-        doc.text("From:  ", margin + 20, margin + 20, {"align": "right"})
-        doc.text(d1, margin + 20, margin + 20)
-        doc.text("Until:  ", margin + 20, margin + 25, {"align": "right"})
-        doc.text(d2, margin + 20, margin + 25)
-
-        # Prepare drawing table
-        doc.setFontSize(10)
-        left_middle = {"align": "left", "baseline": "middle"}
-        right_middle = {"align": "right", "baseline": "middle"}
-        y = margin + 35
-
-        # Draw table
-        npages = 1
-        for chunknr in range(len(chunks)):
-            # Maybe insert a page break early to preserve whole chunks
-            space_used = y - margin
-            space_total = height - 2 * margin
-            if space_used > 0.9 * space_total:
-                rowsleft = sum([len(chunk) for chunk in chunks[chunknr:]])
-                space_needed = rowsleft * rowheight
-                space_needed += (len(chunks) - chunknr) * rowskip
-                if space_needed > space_total - space_used:
-                    doc.addPage()
-                    npages += 1
-                    y = margin
-
-            for rownr, row in enumerate(chunks[chunknr]):
-                # Add page break?
-                if (y + rowheight) > (height - margin):
-                    doc.addPage()
-                    npages += 1
-                    y = margin
-
-                if row[0] == "head":
-                    if showrecords:
-                        doc.setFillColor("#ccc")
-                    else:
-                        doc.setFillColor("#f3f3f3" if rownr % 2 else "#eaeaea")
-                    doc.rect(margin, y, width - 2 * margin, rowheight, "F")
-                    # Duration
-                    doc.setTextColor("#000")
-                    x = margin + coloffsets[0]
-                    doc.text(row[1], x, y + rowheight2, right_middle)  # duration
-                    # Tag names, add structure via color, no padding
-                    basename, lastname = "", row[2]
-                    doc.setTextColor("#555")
-                    x += coloffsets[1]
-                    doc.text(basename, x, y + rowheight2, left_middle)
-                    doc.setTextColor("#000")
-                    x += doc.getTextWidth(basename)
-                    doc.text(lastname, x, y + rowheight2, left_middle)
-
-                elif row[0] == "record":
-                    doc.setFillColor("#f3f3f3" if rownr % 2 else "#eaeaea")
-                    doc.rect(margin, y, width - 2 * margin, rowheight, "F")
-                    doc.setTextColor("#000")
-                    # _, key, duration, sd1, st1, st2, ds, tagz = row
-                    # The duration is right-aligned
-                    x = margin + coloffsets[0]
-                    doc.text(row[2], x, y + rowheight2, right_middle)
-                    # The rest (sd1, st1, st2) is left-aligned
-                    for i in (1, 2, 3):
-                        x += coloffsets[i]
-                        s = row[i + 2]
-                        if i == 3:  # st2
-                            doc.text("-", x - 1, y + rowheight2, right_middle)
-                        doc.text(s, x, y + rowheight2, left_middle)
-                    # The description may be so long we need to split it
-                    x += coloffsets[4]
-                    min_x = x
-                    max_x = width - margin
-                    ds = row[6]
-                    if x + doc.getTextWidth(ds) <= max_x:
-                        doc.text(ds, x, y + rowheight2, left_middle)
-                    else:
-                        w_space = doc.getTextWidth(" ")
-                        for word in ds.split(" "):
-                            w = doc.getTextWidth(word)
-                            if x + w > max_x:  # need new line
-                                x = min_x
-                                y += rowheight
-                                doc.setFillColor("#f3f3f3" if rownr % 2 else "#eaeaea")
-                                doc.rect(margin, y, width - 2 * margin, rowheight, "F")
-                                doc.setTextColor("#000")
-                            doc.text(word, x, y + rowheight2, left_middle)
-                            x += w + w_space
-                else:
-                    doc.setFillColor("#ffeeee")
-                    doc.rect(margin, y, width - 2 * margin, rowheight, "F")
-
-                y += rowheight
-            y += rowskip
-
-        # Add pagination
-        doc.setFontSize(8)
-        doc.setTextColor("#555")
-        for i in range(npages):
-            pagenr = i + 1
-            doc.setPage(pagenr)
-            x, y = width - 0.5 * margin, 0.5 * margin
-            doc.text(f"{pagenr}/{npages}", x, y, {"align": "right", "baseline": "top"})
-
-        doc.save(self._get_export_filename("pdf"))
-        # doc.output('dataurlnewwindow')  # handy during dev
 
 
 class ImportDialog(BaseDialog):
