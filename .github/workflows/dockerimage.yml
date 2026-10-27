@@ -1,13 +1,13 @@
 name: "Build and publish Docker images to GHCR"
 
+# Images are only built from the default branch (main): on every push to
+# main, or when run manually from main (other refs are skipped by the
+# job-level `if` guards below).
 on:
   workflow_dispatch:
-  release:
-    types: [published]
   push:
     branches:
       - main
-      - master
 
 permissions:
   contents: read
@@ -17,6 +17,7 @@ jobs:
 
   # Build default privileged container image version
   docker-root:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repo
@@ -41,8 +42,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}}
             type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -56,6 +57,7 @@ jobs:
 
   # Build non-root container image variant
   docker-nonroot:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repo
@@ -82,8 +84,8 @@ jobs:
           # No "latest" tag for the non-root variant.
           flavor: latest=false
           tags: |
-            type=semver,pattern={{version}},suffix=-nonroot
             type=raw,value=latest-nonroot,enable={{is_default_branch}}
+            type=sha,suffix=-nonroot
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
