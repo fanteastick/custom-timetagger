@@ -37,7 +37,7 @@ jobs:
       matrix:
         include:
           - name: Linux py39
-            os: ubuntu-latest
+            os: ubuntu-24.04
             pyversion: '3.9'
           - name: Linux py310
             os: ubuntu-latest
